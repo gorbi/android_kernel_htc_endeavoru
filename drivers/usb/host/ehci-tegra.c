@@ -61,7 +61,7 @@
 
 #define STS_SRI	(1<<7)	/*	SOF Recieved	*/
 
-#define TEGRA_HSIC_CONNECTION_MAX_RETRIES 5
+//#define TEGRA_HSIC_CONNECTION_MAX_RETRIES 5
 #define HOSTPC_REG_OFFSET		0x1b4
 
 #define HOSTPC1_DEVLC_STS 		(1 << 28)
@@ -90,13 +90,13 @@ struct tegra_ehci_hcd {
 	int port_resuming;
 	int power_down_on_bus_suspend;
 	int default_enable;
-	struct delayed_work work;
+	//struct delayed_work work;
 	enum tegra_usb_phy_port_speed port_speed;
 	struct work_struct clk_timer_work;
 	struct timer_list clk_timer;
 	bool clock_enabled;
 	bool timer_event;
-	int hsic_connect_retries;
+	//int hsic_connect_retries;
 	struct mutex tegra_ehci_hcd_mutex;
 	unsigned int irq;
 	spinlock_t ehci_clk_lock;
@@ -713,9 +713,10 @@ restart:
 		}
 
 		tegra_usb_phy_bus_idle(tegra->phy);
-		tegra->hsic_connect_retries = 0;
+		//tegra->hsic_connect_retries = 0;
 		if (!tegra_usb_phy_is_device_connected(tegra->phy))
-			schedule_delayed_work(&tegra->work, 50);
+			//schedule_delayed_work(&tegra->work, 50);
+			pr_err("%s: no hsic device connection\n", __func__);
 	} else {
 		pr_info(MODULE_NAME "%s (no hsic)call tegra_ehci_restart\n", __func__); /* HTC */
 		tegra_ehci_restart(hcd, false);
@@ -992,6 +993,7 @@ static void tegra_ehci_unmap_urb_for_dma(struct usb_hcd *hcd, struct urb *urb)
 	free_temp_buffer(urb);
 }
 
+#if 0
 static void tegra_hsic_connection_work(struct work_struct *work)
 {
 	struct tegra_ehci_hcd *tegra =
@@ -1008,6 +1010,7 @@ static void tegra_hsic_connection_work(struct work_struct *work)
 	schedule_delayed_work(&tegra->work, jiffies + msecs_to_jiffies(50));
 	return;
 }
+#endif
 
 void clk_timer_callback(unsigned long data)
 {
@@ -1139,7 +1142,7 @@ static int tegra_ehci_probe(struct platform_device *pdev)
 	int irq;
 	int instance = pdev->id;
 
-        pr_info(MODULE_NAME "%s: 0503 shutdown function panic - instance %d\n", __func__, instance); /* HTC */
+        pr_info(MODULE_NAME "%s: 0518 remove function kernel panic - instance %d\n", __func__, instance); /* HTC */
 	pdata = pdev->dev.platform_data;
 	if (!pdata) {
 		dev_err(&pdev->dev, "Platform data missing\n");
@@ -1218,7 +1221,7 @@ static int tegra_ehci_probe(struct platform_device *pdev)
 		goto fail_io;
 	}
 
-	INIT_DELAYED_WORK(&tegra->work, tegra_hsic_connection_work);
+	//INIT_DELAYEDWORK(&tegra->work, tegra_hsic_connection_work);
 
 	INIT_WORK(&tegra->clk_timer_work, clk_timer_work_handler);
 
@@ -1400,8 +1403,8 @@ static int tegra_ehci_remove(struct platform_device *pdev)
 	usb_remove_hcd(hcd);
 	pr_info(MODULE_NAME "%s: call usb_put_hcd(%p)\n", __func__, hcd); /* HTC */
 	usb_put_hcd(hcd);
-	pr_info(MODULE_NAME "%s: call cancel_delayed_work(%p)\n", __func__, &tegra->work); /* HTC */
-	cancel_delayed_work(&tegra->work);
+	//pr_info(MODULE_NAME "%s: call cancel_delayed_work(%p)\n", __func__, &tegra->work); /* HTC */
+	//cancel_delayed_work(&tegra->work);
 	pr_info(MODULE_NAME "%s: call tegra_usb_phy_power_off(%p)\n", __func__, tegra->phy); /* HTC */
 	tegra_usb_phy_power_off(tegra->phy, true);
 	pr_info(MODULE_NAME "%s: call tegra_usb_phy_close(%p)\n", __func__, tegra->phy); /* HTC */

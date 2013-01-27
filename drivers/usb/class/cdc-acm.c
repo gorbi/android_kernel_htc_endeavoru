@@ -151,6 +151,12 @@ unsigned static int txbyte=0,rxbyte=0;
 char gpr_buf[512];
 static int pcount=0;
 static int debugtestcoung=0; 
+
+static void acm_rx_tasklet_rescheduler(struct work_struct *work);
+#define ACM_RX_TASKLET_DELAY	500
+#define JIFFIES_ACM_RX_TASKLET	msecs_to_jiffies(ACM_RX_TASKLET_DELAY)
+
+
 module_param(max_intfs, int, 0644);
 MODULE_PARM_DESC(max_intfs, "usb class (cdc-acm) - Number of TTYACMs");
 
@@ -628,6 +634,19 @@ static void acm_read_bulk(struct urb *urb)
 	
 }
 
+static void acm_rx_tasklet_rescheduler(struct work_struct *work)
+{
+	struct acm *acm = container_of(work, struct acm, dwork.work);
+
+	if(!ACM_READY(acm)){
+                pr_info("%s: ACM not ready\n", __func__);
+                return;
+        }
+
+	pr_info(MODULE_NAME "%s, tasklet_schedule\n", __func__);
+	tasklet_schedule(&acm->urb_task);
+}
+
 static void acm_rx_tasklet(unsigned long _acm)
 {
 	struct acm *acm = (void *)_acm;
@@ -808,6 +827,10 @@ next_buffer:
 		list_add(&buf->list, &acm->filled_read_bufs);
 		spin_unlock_irqrestore(&acm->read_lock, flags);
 		rwlog(MODULE_NAME "%s(%d) ttyACM%d - exit\n", __func__, __LINE__, acm->minor);
+		if(acm->minor == 1)
+		{
+			schedule_delayed_work(&acm->dwork, JIFFIES_ACM_RX_TASKLET);
+		}
 		return;
 	}
 	goto next_buffer;
@@ -1531,7 +1554,7 @@ static int acm_probe(struct usb_interface *intf,
 	int i;
 	int combined_interfaces = 0;
 
-	pr_info("%s: 0710 - zero length packet. intf->cur_altsetting->desc.bInterfaceNumber %d max_intfs=%d\n",
+	pr_info("%s: 0809 - MAlog stop solution. intf->cur_altsetting->desc.bInterfaceNumber %d max_intfs=%d\n",
 		__func__, intf->cur_altsetting->desc.bInterfaceNumber,max_intfs);
 
 	/* normal quirks */
@@ -1783,6 +1806,11 @@ made_compressed_probe:
 	acm->urb_task.func = acm_rx_tasklet;
 	acm->urb_task.data = (unsigned long) acm;
 	INIT_WORK(&acm->work, acm_softint);
+	if(acm->minor == 1){
+		pr_info("%s: create delayed work for ttyACM%d\n", __func__, acm->minor);
+		INIT_DELAYED_WORK(&acm->dwork, acm_rx_tasklet_rescheduler);
+	}
+	
 	init_usb_anchor(&acm->deferred);
 	init_waitqueue_head(&acm->drain_wait);
 	spin_lock_init(&acm->throttle_lock);
@@ -2008,6 +2036,11 @@ static void acm_disconnect(struct usb_interface *intf)
 	}
 
 	mutex_lock(&open_mutex);
+	if(acm->minor == 1){
+		pr_info("%s: cancel delayed work for ttyACM%d\n", __func__, acm->minor);
+		cancel_delayed_work_sync(&acm->dwork);
+	}
+
 	if (acm->country_codes) {
 		device_remove_file(&acm->control->dev,
 				&dev_attr_wCountryCodes);

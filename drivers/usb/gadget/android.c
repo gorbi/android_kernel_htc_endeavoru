@@ -1397,7 +1397,7 @@ static int projector_function_init(struct android_usb_function *f,
 	if (!f->config)
 		return -ENOMEM;
 
-	return projector_setup();
+	return projector_setup(f->config);
 }
 
 static void projector_function_cleanup(struct android_usb_function *f)
@@ -1414,31 +1414,9 @@ static void projector_function_cleanup(struct android_usb_function *f)
 static int projector_function_bind_config(struct android_usb_function *f,
 		struct usb_configuration *c)
 {
-	return projector_bind_config(c, f->config);
+	return projector_bind_config(c);
 }
 
-
-static ssize_t projector_product_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct android_usb_function *f = dev_get_drvdata(dev);
-	struct htcmode_protocol *config = f->config;
-	return snprintf(buf, PRODUCT_NAME_MAX, "%s\n", config->product_name);
-}
-
-static DEVICE_ATTR(product, S_IRUGO | S_IWUSR, projector_product_show,
-						    NULL);
-
-static ssize_t projector_car_model_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct android_usb_function *f = dev_get_drvdata(dev);
-	struct htcmode_protocol *config = f->config;
-	return snprintf(buf, CAR_MODEL_NAME_MAX, "%s\n", config->car_model);
-}
-
-static DEVICE_ATTR(car_model, S_IRUGO | S_IWUSR, projector_car_model_show,
-						    NULL);
 
 static ssize_t projector_width_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1484,14 +1462,78 @@ static ssize_t projector_version_show(struct device *dev,
 static DEVICE_ATTR(version, S_IRUGO | S_IWUSR, projector_version_show,
 						    NULL);
 
+static ssize_t projector_vendor_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	return snprintf(buf, PAGE_SIZE, "%d\n", config->vendor);
+}
+
+static DEVICE_ATTR(vendor, S_IRUGO | S_IWUSR, projector_vendor_show,
+						    NULL);
+
+static ssize_t projector_server_nonce_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	memcpy(buf, config->nonce, HSML_SERVER_NONCE_SIZE);
+	return HSML_SERVER_NONCE_SIZE;
+}
+
+static DEVICE_ATTR(server_nonce, S_IRUGO | S_IWUSR, projector_server_nonce_show,
+						    NULL);
+
+static ssize_t projector_client_sig_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	memcpy(buf, config->client_sig, HSML_CLIENT_SIG_SIZE);
+	return HSML_CLIENT_SIG_SIZE;
+}
+
+static DEVICE_ATTR(client_sig, S_IRUGO | S_IWUSR, projector_client_sig_show,
+						    NULL);
+
+static ssize_t projector_server_sig_store(
+		struct device *dev, struct device_attribute *attr,
+		const char *buff, size_t size)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	memcpy(config->server_sig, buff, HSML_SERVER_SIG_SIZE);
+	return HSML_SERVER_SIG_SIZE;
+}
+
+static DEVICE_ATTR(server_sig, S_IWUSR, NULL,
+		projector_server_sig_store);
+
+static ssize_t projector_auth_store(
+		struct device *dev, struct device_attribute *attr,
+		const char *buff, size_t size)
+{
+	struct android_usb_function *f = dev_get_drvdata(dev);
+	struct htcmode_protocol *config = f->config;
+	memcpy(&config->auth_result, buff, sizeof(config->auth_result));
+	config->auth_in_progress = 0;
+	return sizeof(config->auth_result);
+}
+
+static DEVICE_ATTR(auth, S_IWUSR, NULL,
+		projector_auth_store);
 
 static struct device_attribute *projector_function_attributes[] = {
-	&dev_attr_product,
-	&dev_attr_car_model,
 	&dev_attr_width,
 	&dev_attr_height,
 	&dev_attr_rotation,
 	&dev_attr_version,
+	&dev_attr_vendor,
+	&dev_attr_server_nonce,
+	&dev_attr_client_sig,
+	&dev_attr_server_sig,
+	&dev_attr_auth,
 	NULL
 };
 

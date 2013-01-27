@@ -31,18 +31,12 @@ struct platform_tegra_pwm_backlight_data {
 	int (*check_fb)(struct device *dev, struct fb_info *info);
 	int backlight_mode;
 	int backlight_status;
-	int lcm_source;
 };
 
 enum {
        BACKLIGHT_ENABLE = 0,
        BACKLIGHT_SKIP_WHEN_PROBE,
        BACKLIGHT_DISABLE,
-};
-
-enum {
-	NOVATEK = 0,
-	HIMAX,
 };
 
 
