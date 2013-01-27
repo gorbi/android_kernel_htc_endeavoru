@@ -182,7 +182,6 @@ static struct platform_tegra_pwm_backlight_data endeavor_disp1_backlight_data = 
 	/* Only toggle backlight on fb blank notifications for disp1 */
 	.check_fb	= endeavor_disp1_check_fb,
 	.backlight_status	= BACKLIGHT_ENABLE,
-	.lcm_source = NOVATEK,
 };
 
 static struct platform_device endeavor_disp1_backlight_device = {
@@ -4218,18 +4217,15 @@ int __init endeavor_panel_init(void)
 		case PANEL_ID_ENRTD_SHARP_HX_C3:
 			endeavor_dsi.n_init_cmd = ARRAY_SIZE(dsi_init_sharp_hx_c3_cmd);
 			endeavor_dsi.dsi_init_cmd = dsi_init_sharp_hx_c3_cmd;
-			endeavor_disp1_backlight_data.lcm_source = HIMAX;
 		break;
 		case PANEL_ID_ENR_SHARP_HX_C4:
 		case PANEL_ID_ENRTD_SHARP_HX_C4:
 			endeavor_dsi.n_init_cmd = ARRAY_SIZE(dsi_init_sharp_hx_c4_cmd);
 			endeavor_dsi.dsi_init_cmd = dsi_init_sharp_hx_c4_cmd;
-			endeavor_disp1_backlight_data.lcm_source = HIMAX;
 		break;
 		case PANEL_ID_SHARP_HX_C5:
 			endeavor_dsi.n_init_cmd = ARRAY_SIZE(dsi_init_sharp_hx_c5_cmd);
 			endeavor_dsi.dsi_init_cmd = dsi_init_sharp_hx_c5_cmd;
-			endeavor_disp1_backlight_data.lcm_source = HIMAX;
 		break;
 		case PANEL_ID_ENR_SONY_NT_C1:
 		case PANEL_ID_ENRTD_SONY_NT_C1:

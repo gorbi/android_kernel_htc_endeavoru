@@ -72,6 +72,8 @@ struct tegra_otg_data {
 	int rcv_host_en;
 };
 static struct tegra_otg_data *tegra_clone;
+int USB_disabled;
+EXPORT_SYMBOL_GPL(USB_disabled);
 
 #if defined(CONFIG_CABLE_DETECT_ACCESSORY)
 extern void cable_detection_queue_recovery_host_work(time);
@@ -266,6 +268,13 @@ static void irq_work(struct work_struct *work)
 		} else if (to == OTG_STATE_A_HOST) {
 			if (from == OTG_STATE_A_SUSPEND)
 				tegra_start_host(tegra);
+		}
+		if (from == to) {
+			USB_INFO("%s --> %s (%d)\n", tegra_state_name(from), tegra_state_name(to), USB_disabled);
+			if (USB_disabled)
+				usb_gadget_disconnect(otg->gadget);
+			else
+				usb_gadget_connect(otg->gadget);
 		}
 	}
 	clk_disable(tegra->clk);
@@ -584,5 +593,12 @@ subsys_initcall(tegra_otg_init);
 static void __exit tegra_otg_exit(void)
 {
 	platform_driver_unregister(&tegra_otg_driver);
+}
+
+/* htc */
+void tegra_otg_set_disable_usb(int disable_usb)
+{
+	USB_disabled = disable_usb;
+	schedule_work(&tegra_clone->work);
 }
 module_exit(tegra_otg_exit);

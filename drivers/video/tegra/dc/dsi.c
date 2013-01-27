@@ -859,6 +859,31 @@ static void tegra_dsi_set_pkt_seq(struct tegra_dc *dc,
 	}
 }
 
+static void tegra_dsi_soft_reset(struct tegra_dc_dsi_data *dsi)
+{
+	u32 trigger;
+
+	tegra_dsi_writel(dsi,
+			DSI_POWER_CONTROL_LEG_DSI_ENABLE(TEGRA_DSI_DISABLE),
+			DSI_POWER_CONTROL);
+	/* stabilization delay */
+	udelay(300);
+
+	tegra_dsi_writel(dsi,
+			DSI_POWER_CONTROL_LEG_DSI_ENABLE(TEGRA_DSI_ENABLE),
+			DSI_POWER_CONTROL);
+	/* stabilization delay */
+	udelay(300);
+
+	/* dsi HW does not clear host trigger bit automatically
+	 * on dsi interface disable if host fifo is empty or in mid
+	 * of host transmission
+	 */
+	trigger = tegra_dsi_readl(dsi, DSI_TRIGGER);
+	if (trigger)
+		tegra_dsi_writel(dsi, 0x0, DSI_TRIGGER);
+}
+
 static void tegra_dsi_stop_dc_stream(struct tegra_dc *dc,
 					struct tegra_dc_dsi_data *dsi)
 {
@@ -877,13 +902,13 @@ static void tegra_dsi_stop_dc_stream_at_frame_end(struct tegra_dc *dc,
 	long timeout;
 	u32 frame_period = DIV_ROUND_UP(S_TO_MS(1), dsi->info.refresh_rate);
 
-	/* stop dc */
-	tegra_dsi_stop_dc_stream(dc, dsi);
+	INIT_COMPLETION(dc->frame_end_complete);
 
-	/* enable frame end interrupt */
+	/* unmask frame end interrupt */
 	val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
-	val |= FRAME_END_INT;
-	tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
+	tegra_dc_writel(dc, val | FRAME_END_INT, DC_CMD_INT_MASK);
+
+	tegra_dsi_stop_dc_stream(dc, dsi);
 
 	/* wait for frame_end completion.
 	 * timeout is 2 frame duration to accomodate for
@@ -893,9 +918,14 @@ static void tegra_dsi_stop_dc_stream_at_frame_end(struct tegra_dc *dc,
 			&dc->frame_end_complete,
 			msecs_to_jiffies(2 * frame_period));
 
-	/* disable frame end interrupt */
-	val = tegra_dc_readl(dc, DC_CMD_INT_MASK);
-	val &= ~FRAME_END_INT;
+	/* give 2 line time to dsi HW to catch up
+	 * with pixels sent by dc
+	 */
+	udelay(50);
+
+	tegra_dsi_soft_reset(dsi);
+
+	/* reinstate interrupt mask */
 	tegra_dc_writel(dc, val, DC_CMD_INT_MASK);
 
 	if (timeout == 0)
@@ -1302,21 +1332,6 @@ success:
 	err = 0;
 fail:
 	return err;
-}
-
-static void tegra_dsi_soft_reset(struct tegra_dc_dsi_data *dsi)
-{
-	tegra_dsi_writel(dsi,
-		DSI_POWER_CONTROL_LEG_DSI_ENABLE(TEGRA_DSI_DISABLE),
-		DSI_POWER_CONTROL);
-	/* stabilization delay */
-	udelay(300);
-
-	tegra_dsi_writel(dsi,
-		DSI_POWER_CONTROL_LEG_DSI_ENABLE(TEGRA_DSI_ENABLE),
-		DSI_POWER_CONTROL);
-	/* stabilization delay */
-	udelay(300);
 }
 
 static bool tegra_dsi_write_busy(struct tegra_dc_dsi_data *dsi)

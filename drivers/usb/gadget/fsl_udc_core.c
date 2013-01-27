@@ -145,6 +145,7 @@ struct wake_lock udc_resume_wake_lock;
 
 /* it is initialized in probe()  */
 struct fsl_udc *udc_controller = NULL;
+extern int USB_disabled;
 
 static const struct usb_endpoint_descriptor
 fsl_ep0_desc = {
@@ -1189,8 +1190,12 @@ static int fsl_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 
 	done(ep, req, -ECONNRESET);
 
+	spin_unlock_irqrestore(&ep->udc->lock, flags);
+	return ret;
+
 	/* Enable EP */
 out:
+	USB_INFO("fsl_ep_dequeue out\n");
 #if defined(CONFIG_ARCH_TEGRA)
 	/* Touch the registers if cable is connected and phy is on */
 	if(vbus_enabled())
@@ -3089,22 +3094,29 @@ void tegra_usb_set_vbus_state(int online)
 			}
 		}
 		else if (!udc->vbus_active && online) {
-			fsl_udc_clk_resume(false);
-			/* setup the controller in the device mode */
-			dr_controller_setup(udc);
-			/* setup EP0 for setup packet */
-			ep0_setup(udc);
-			/* initialize the USB and EP states */
-			udc->usb_state = USB_STATE_ATTACHED;
-			udc->ep0_state = WAIT_FOR_SETUP;
-			udc->ep0_dir = 0;
-			udc->vbus_active = 1;
-			/* start the controller */
-			dr_controller_run(udc);
-			if (udc->vbus_regulator) {
-				/* set the current limit to 100mA */
-				regulator_set_current_limit(
-					udc->vbus_regulator, 0, 100);
+			if (!USB_disabled) {
+				fsl_udc_clk_resume(false);
+				/* setup the controller in the device mode */
+				dr_controller_setup(udc);
+				/* setup EP0 for setup packet */
+				ep0_setup(udc);
+				/* initialize the USB and EP states */
+				udc->usb_state = USB_STATE_ATTACHED;
+				udc->ep0_state = WAIT_FOR_SETUP;
+				udc->ep0_dir = 0;
+				udc->vbus_active = 1;
+				/* start the controller */
+				dr_controller_run(udc);
+				if (udc->vbus_regulator) {
+					/* set the current limit to 100mA */
+					regulator_set_current_limit(
+						udc->vbus_regulator, 0, 100);
+				}
+			} else {
+				USB_INFO("%s (%d) USB_disable", __func__, online);
+				fsl_udc_clk_resume(false);
+				udc->vbus_active = 1;
+				udc->usb_state = USB_STATE_DEFAULT;
 			}
 			/* Schedule work to wait for 1000 msec and check for
 			 * charger if setup packet is not received */
