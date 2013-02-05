@@ -161,12 +161,16 @@ static void adb_request_free(struct usb_request *req, struct usb_ep *ep)
 
 static inline int adb_lock(atomic_t *excl)
 {
+	int ret = -1;
+
+	preempt_disable();
 	if (atomic_inc_return(excl) == 1) {
-		return 0;
-	} else {
+		ret = 0;
+	} else
 		atomic_dec(excl);
-		return -1;
-	}
+
+	preempt_enable();
+	return ret;
 }
 
 static inline void adb_unlock(atomic_t *excl)
@@ -211,6 +215,7 @@ static void adb_complete_in(struct usb_ep *ep, struct usb_request *req)
 		atomic_set(&dev->error, 1);
 	}
 	adb_req_put(dev, &dev->tx_idle, req);
+
 	wake_up(&dev->write_wq);
 }
 
@@ -273,7 +278,7 @@ static int adb_create_bulk_endpoints(struct adb_dev *dev,
 	return 0;
 
 fail:
-	printk(KERN_ERR "[USBF] adb_bind() could not allocate requests\n");
+	printk(KERN_ERR "[USB] adb_bind() could not allocate requests\n");
 	return -1;
 }
 
@@ -423,18 +428,29 @@ static ssize_t adb_write(struct file *fp, const char __user *buf,
 
 static int adb_open(struct inode *ip, struct file *fp)
 {
-	if (adb_count_get() < ADB_PRINT_LIMIT) { /* htc */
-		printk(KERN_INFO "[USB] %s: %s(parent:%s): tgid=%d (%d)\n",
-			__func__, current->comm, current->parent->comm, current->tgid, adb_count_get());
-	}
+	static unsigned long last_print;
+	static unsigned long count = 0;
 
 	if (!_adb_dev)
 		return -ENODEV;
 
+	if (++count == 1)
+		last_print = jiffies;
+	else {
+		if (!time_before(jiffies, last_print + HZ/2))
+			count = 0;
+		last_print = jiffies;
+	}
+
 	if (adb_lock(&_adb_dev->open_excl)) {
+		cpu_relax();
 		printk(KERN_INFO "[USB] %s: busy\n", __func__);  /* htc */
 		return -EBUSY;
 	}
+
+	if (count < 5)
+		printk(KERN_INFO "[USB] adb_open(%s)\n", current->comm);
+
 
 	fp->private_data = _adb_dev;
 
@@ -446,12 +462,19 @@ static int adb_open(struct inode *ip, struct file *fp)
 
 static int adb_release(struct inode *ip, struct file *fp)
 {
-	if (adb_count_get() < ADB_PRINT_LIMIT) { /* htc */
-		printk(KERN_INFO "[USB] %s: %s(parent:%s): tgid=%d (%d)\n",
-			__func__, current->comm, current->parent->comm, current->tgid, adb_count_get());
+	static unsigned long last_print;
+	static unsigned long count = 0;
+
+	if (++count == 1)
+		last_print = jiffies;
+	else {
+		if (!time_before(jiffies, last_print + HZ/2))
+			count = 0;
+		last_print = jiffies;
 	}
 
-	adb_count_add(); /* htc */
+	if (count < 5)
+		printk(KERN_INFO "[USB] adb_release\n");
 	adb_unlock(&_adb_dev->open_excl);
 	return 0;
 }
@@ -610,16 +633,12 @@ static int adb_function_set_alt(struct usb_function *f,
 	int ret;
 
 	DBG(cdev, "adb_function_set_alt intf: %d alt: %d\n", intf, alt);
-	ret = usb_ep_enable(dev->ep_in,
-			ep_choose(cdev->gadget,
-				&adb_highspeed_in_desc,
-				&adb_fullspeed_in_desc));
+	config_ep_by_speed(cdev->gadget, f, dev->ep_in);
+	ret = usb_ep_enable(dev->ep_in);
 	if (ret)
 		return ret;
-	ret = usb_ep_enable(dev->ep_out,
-			ep_choose(cdev->gadget,
-				&adb_highspeed_out_desc,
-				&adb_fullspeed_out_desc));
+	config_ep_by_speed(cdev->gadget, f, dev->ep_out);
+	ret = usb_ep_enable(dev->ep_out);
 	if (ret) {
 		usb_ep_disable(dev->ep_in);
 		return ret;
@@ -652,7 +671,7 @@ static int adb_bind_config(struct usb_configuration *c)
 {
 	struct adb_dev *dev = _adb_dev;
 
-	printk(KERN_INFO "[USBF] adb_bind_config\n");
+	printk(KERN_INFO "[USB] adb_bind_config\n");
 
 	dev->cdev = c->cdev;
 	dev->function.name = "adb";
@@ -704,17 +723,13 @@ static int adb_setup(void)
 
 err:
 	kfree(dev);
-	printk(KERN_ERR "[USBF] adb gadget driver failed to initialize\n");
+	printk(KERN_ERR "[USB] adb gadget driver failed to initialize\n");
 	return ret;
 }
 
 static void adb_cleanup(void)
 {
 	misc_deregister(&adb_device);
-	/* mfgkernel mode need this device node
-	 */
-	if ((board_mfg_mode() != BOARD_MFG_MODE_NORMAL) || (board_get_usb_ats() == 1))
-		misc_deregister(&adb_enable_device);
 
 	kfree(_adb_dev);
 	_adb_dev = NULL;

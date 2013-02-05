@@ -74,9 +74,7 @@ static int tegra_idle_enter_lp3(struct cpuidle_device *dev,
 
 	exit = ktime_sub(ktime_get(), enter);
 	us = ktime_to_us(exit);
-	/* move from driver/cpuidle/cpuidle.c */
-	dev->states[0].usage++;
-	dev->states[0].time += (unsigned long long)us;
+
 	local_fiq_enable();
 	local_irq_enable();
 	return (int)us;
@@ -114,8 +112,10 @@ static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 	s64 us;
 
 	if (!lp2_in_idle || lp2_disabled_by_suspend ||
-	    !tegra_lp2_is_allowed(dev, state))
+	    !tegra_lp2_is_allowed(dev, state)) {
+		dev->last_state = &dev->states[0];
 		return tegra_idle_enter_lp3(dev, state);
+	}
 
 	local_irq_disable();
 	enter = ktime_get();
@@ -127,9 +127,6 @@ static int tegra_idle_enter_lp2(struct cpuidle_device *dev,
 	us = ktime_to_us(exit);
 
 	local_irq_enable();
-
-	/* cpu clockevents may have been reset by powerdown */
-	hrtimer_peek_ahead_timers();
 
 	smp_rmb();
 

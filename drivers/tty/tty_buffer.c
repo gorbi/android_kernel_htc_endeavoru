@@ -57,21 +57,12 @@ void tty_buffer_free_all(struct tty_struct *tty)
 static struct tty_buffer *tty_buffer_alloc(struct tty_struct *tty, size_t size)
 {
 	struct tty_buffer *p;
-	static int tty_buffer_alloc_err = 0;
 
-	if (tty->buf.memory_used + size > 65536) {
-		if ( tty_buffer_alloc_err == 0 ) {
-			tty_buffer_alloc_err = 1;
-			pr_err("%s: tty buffer overflow. (%s, %d, %d)\n", __func__, tty->driver->driver_name, tty->buf.memory_used, size);
-		}
+	if (tty->buf.memory_used + size > 65536)
 		return NULL;
-	}
-	tty_buffer_alloc_err = 0;
 	p = kmalloc(sizeof(struct tty_buffer) + 2 * size, GFP_ATOMIC);
-	if (p == NULL) {
-		pr_err("%s: kmalloc failed for size %d\n", __func__, size);
+	if (p == NULL)
 		return NULL;
-	}
 	p->used = 0;
 	p->size = size;
 	p->next = NULL;
@@ -256,12 +247,6 @@ int tty_insert_flip_string_fixed_flag(struct tty_struct *tty,
 		const unsigned char *chars, char flag, size_t size)
 {
 	int copied = 0;
-
-	if (tty == NULL || chars == NULL) {
-		pr_info("%s: error tty is null\n", __func__);
-		return -EINVAL;
-	}
-
 	do {
 		int goal = min_t(size_t, size - copied, TTY_BUFFER_PAGE);
 		int space = tty_buffer_request_room(tty, goal);
@@ -269,20 +254,6 @@ int tty_insert_flip_string_fixed_flag(struct tty_struct *tty,
 		/* If there is no space then tb may be NULL */
 		if (unlikely(space == 0))
 			break;
-
-		if (tb == NULL) {
-			pr_err("%s: Error - tty->buf.tail is null\n", __func__);
-			break;
-		}
-		if (tb->char_buf_ptr == NULL) {
-			pr_err("%s: Error - tb->char_buf_ptr is null\n", __func__);
-			break;
-		}
-		if (tb->flag_buf_ptr == NULL) {
-			pr_err("%s: Error - tb->flag_buf_ptr is null\n", __func__);
-			break;
-		}
-
 		memcpy(tb->char_buf_ptr + tb->used, chars, space);
 		memset(tb->flag_buf_ptr + tb->used, flag, space);
 		tb->used += space;
@@ -313,7 +284,6 @@ int tty_insert_flip_string_flags(struct tty_struct *tty,
 		const unsigned char *chars, const char *flags, size_t size)
 {
 	int copied = 0;
-
 	do {
 		int goal = min_t(size_t, size - copied, TTY_BUFFER_PAGE);
 		int space = tty_buffer_request_room(tty, goal);
@@ -443,8 +413,7 @@ static void flush_to_ldisc(struct work_struct *work)
 	spin_lock_irqsave(&tty->buf.lock, flags);
 
 	if (!test_and_set_bit(TTY_FLUSHING, &tty->flags)) {
-		struct tty_buffer *head, *tail = tty->buf.tail;
-		int seen_tail = 0;
+		struct tty_buffer *head;
 		while ((head = tty->buf.head) != NULL) {
 			int count;
 			char *char_buf;
@@ -454,15 +423,6 @@ static void flush_to_ldisc(struct work_struct *work)
 			if (!count) {
 				if (head->next == NULL)
 					break;
-				/*
-				  There's a possibility tty might get new buffer
-				  added during the unlock window below. We could
-				  end up spinning in here forever hogging the CPU
-				  completely. To avoid this let's have a rest each
-				  time we processed the tail buffer.
-				*/
-				if (tail == head)
-					seen_tail = 1;
 				tty->buf.head = head->next;
 				tty_buffer_free(tty, head);
 				continue;
@@ -472,7 +432,7 @@ static void flush_to_ldisc(struct work_struct *work)
 			   line discipline as we want to empty the queue */
 			if (test_bit(TTY_FLUSHPENDING, &tty->flags))
 				break;
-			if (!tty->receive_room || seen_tail)
+			if (!tty->receive_room)
 				break;
 			if (count > tty->receive_room)
 				count = tty->receive_room;

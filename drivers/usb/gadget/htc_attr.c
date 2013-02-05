@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  *
  */
-
+#include <linux/usb/ch9.h>
 #include <mach/board_htc.h>
 #include <mach/cable_detect.h>
 #include <linux/gpio.h>
@@ -105,6 +105,7 @@ static struct usb_string_node usb_string_array[] = {
 static int use_mfg_serialno;
 static char mfg_df_serialno[16];
 static int intrsharing;
+void tegra_otg_set_disable_usb(int disable_usb);
 
 #define PID_RNDIS		0x0ffe
 #define PID_ECM			0x0ff8
@@ -282,10 +283,10 @@ int android_switch_function(unsigned func)
 	unsigned val;
 
 	/* framework may try to enable adb before android_usb_init_work is done.*/
-       if (dev->enabled != true) {
-              pr_info("%s: USB driver is not initialize\n", __func__);
-              return 0;
-       }
+	if (dev->enabled != true) {
+		pr_info("%s: USB driver is not initialize\n", __func__);
+		return 0;
+	}
 
 	mutex_lock(&function_bind_sem);
 
@@ -305,8 +306,9 @@ int android_switch_function(unsigned func)
 
 	INIT_LIST_HEAD(&dev->enabled_functions);
 	if (board_mfg_mode() == BOARD_MFG_MODE_OFFMODE_CHARGING) {
-		func = 3;/* USB_FUNCTION_UMS + USB_FUNCTION_ADB */
+		func = 0;
 		pr_debug("%s enter offmode-charging\n", __func__);
+		tegra_otg_set_disable_usb(1);
 	}
 
 	while ((f = *functions++)) {
@@ -334,7 +336,8 @@ int android_switch_function(unsigned func)
 #endif
 		} else if ((func & (1 << USB_FUNCTION_MODEM)) &&
 				!strcmp(f->name, "modem")) {
-			list_add_tail(&f->enabled_list, &dev->enabled_functions);
+			if (_android_dev->pdata->support_modem)
+				list_add_tail(&f->enabled_list, &dev->enabled_functions);
 #ifdef CONFIG_USB_ANDROID_MDM9K_MODEM
 			func |= 1 << USB_FUNCTION_MODEM_MDM;
 #endif
@@ -416,7 +419,10 @@ int android_switch_function(unsigned func)
 
 	usb_add_config(dev->cdev, &android_config_driver, android_bind_config);
 
-	mdelay(100);
+	/* reset usb controller/phy for USB stability */
+	usb_gadget_request_reset(dev->cdev->gadget);
+
+	mdelay(200);
 	usb_gadget_connect(dev->cdev->gadget);
 	dev->enabled = true;
 
@@ -424,14 +430,107 @@ int android_switch_function(unsigned func)
 	return 0;
 }
 
-void android_set_serialno(char *serialno)
+struct work_struct	switch_adb_work;
+static char enable_adb;
+static void do_switch_adb_work(struct work_struct *work)
 {
-	strings_dev[STRING_SERIAL_IDX].s = serialno;
+	int	call_us_ret = -1;
+	char *envp[] = {
+		"HOME=/",
+		"PATH=/sbin:/system/sbin:/system/bin:/system/xbin",
+		NULL,
+	};
+	char *exec_path[2] = {"/system/bin/stop", "/system/bin/start" };
+	char *argv_stop[] = { exec_path[0], "adbd", NULL, };
+	char *argv_start[] = { exec_path[1], "adbd", NULL, };
+
+	if (enable_adb) {
+		call_us_ret = call_usermodehelper(exec_path[1],
+			argv_start, envp, UMH_WAIT_PROC);
+	} else {
+		call_us_ret = call_usermodehelper(exec_path[0],
+			argv_stop, envp, UMH_WAIT_PROC);
+	}
+	htc_usb_enable_function("adb", enable_adb);
+}
+static int android_switch_setup(struct usb_gadget *gadget,
+		const struct usb_ctrlrequest *c)
+{
+	int value = -EOPNOTSUPP;
+	u16 wIndex = le16_to_cpu(c->wIndex);
+	u16 wValue = le16_to_cpu(c->wValue);
+#if 0
+	u16 wLength = le16_to_cpu(c->wLength);
+#endif
+	struct usb_composite_dev *cdev = get_gadget_data(gadget);
+	struct usb_request *req = cdev->req;
+	/* struct android_dev *dev = _android_dev; */
+#if 0/* TODO */
+	switch (c->bRequestType & USB_TYPE_MASK) {
+	case USB_TYPE_VENDOR:
+
+		switch (c->bRequest) {
+		case USB_REQ_HTC_FUNCTION:
+
+			switch (wValue) {
+			case USB_WVAL_ADB:
+
+				value = 0;
+				req->zero = 0;
+				req->length = value;
+				if (usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC))
+					printk(KERN_ERR "ep0 in queue failed\n");
+
+				if (wIndex == 1) {
+					enable_adb = 1;
+					schedule_work(&switch_adb_work);
+				} else if (wIndex == 0) {
+					enable_adb = 0;
+					schedule_work(&switch_adb_work);
+				}
+				break;
+
+			default:
+				break;
+			}
+
+			break;
+
+		default:
+			break;
+		}
+		break;
+	default:
+		break;
+	}
+#endif
+	return value;
 }
 
-void android_switch_adb_ums(void)
+static int usb_autobot_mode(void)
 {
-	android_switch_function((1 << USB_FUNCTION_ADB) |
+	if (_android_dev->autobot_mode)
+		return 1;
+	else
+		return 0;
+}
+
+void android_switch_default(void)
+{
+	unsigned val;
+
+	mutex_lock(&function_bind_sem);
+	val = htc_usb_get_func_combine_value();
+	mutex_unlock(&function_bind_sem);
+
+	if (val & (1 << USB_FUNCTION_ADB))
+		android_switch_function(
+				(1 << USB_FUNCTION_MTP) |
+				(1 << USB_FUNCTION_ADB) |
+				(1 << USB_FUNCTION_UMS));
+	else
+		android_switch_function(
+				(1 << USB_FUNCTION_MTP) |
 				(1 << USB_FUNCTION_UMS));
 }
 
@@ -442,6 +541,12 @@ void android_switch_htc_mode(void)
 				(1 << USB_FUNCTION_SERIAL) |
 				(1 << USB_FUNCTION_UMS) |
 				(1 << USB_FUNCTION_AUTOBOT));
+}
+
+
+void android_set_serialno(char *serialno)
+{
+	strings_dev[STRING_SERIAL_IDX].s = serialno;
 }
 
 
@@ -615,8 +720,61 @@ static ssize_t store_usb_phy_setting(struct device *dev,
 	return otg_store_usb_phy_setting(buf, count);
 }
 #endif
+static ssize_t show_usb_perflock_setting(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	unsigned length;
+	length = sprintf(buf, "Performance lock on gadgets: %s\n",
+		(_android_dev->bEnablePerfLock) ? "on" : "off");
+	return length;
+}
 
-void tegra_otg_set_disable_usb(int disable_usb);
+static ssize_t store_usb_perflock_setting(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	unsigned u, enable;
+	ssize_t  ret;
+
+	ret = strict_strtoul(buf, 10, (unsigned long *)&u);
+	if (ret < 0) {
+		USB_ERR("%s: %d\n", __func__, ret);
+		return 0;
+	}
+
+	enable = u ? 1 : 0;
+
+	USB_INFO("performance_lock was %s\n", enable ? "enabled" : "disabled");
+	_android_dev->bEnablePerfLock = enable;
+
+	return count;
+}
+
+#if (defined(CONFIG_USB_OTG) && defined(CONFIG_USB_OTG_HOST))
+void usb_host_status_notifier_func(int isEnable);
+static ssize_t store_usb_host_mode(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	unsigned u, enable;
+	ssize_t  ret;
+
+	ret = strict_strtoul(buf, 10, (unsigned long *)&u);
+	if (ret < 0) {
+		USB_ERR("%s: %d\n", __func__, ret);
+		return 0;
+	}
+
+	enable = u ? 1 : 0;
+	USB_INFO("%s (%s)\n", __func__, enable ? "Enable" : "Disable");
+	usb_host_status_notifier_func(enable);
+
+	return count;
+}
+static DEVICE_ATTR(host_mode, 0220,
+		NULL, store_usb_host_mode);
+#endif
+
 static ssize_t store_usb_disable_setting(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -634,6 +792,16 @@ static ssize_t store_usb_disable_setting(struct device *dev,
 	return count;
 }
 
+/* show current os type for mac or non-mac */
+static ssize_t show_os_type(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	unsigned length;
+
+	length = sprintf(buf, "%d\n", os_type);
+	USB_INFO("%s: %s\n", __func__, buf);
+	return length;
+}
 static DEVICE_ATTR(usb_cable_connect, 0444, show_usb_cable_connect, NULL);
 static DEVICE_ATTR(usb_function_switch, 0664,
 		show_usb_function_switch, store_usb_function_switch);
@@ -643,10 +811,14 @@ static DEVICE_ATTR(usb_serial_number, 0644,
 static DEVICE_ATTR(dummy_usb_serial_number, 0644,
 		show_dummy_usb_serial_number, store_dummy_usb_serial_number);
 static DEVICE_ATTR(usb_car_kit_enable, 0444, show_usb_car_kit_enable, NULL);
-//static DEVICE_ATTR(usb_phy_setting, 0664,
-//		show_usb_phy_setting, store_usb_phy_setting);
+/*static DEVICE_ATTR(usb_phy_setting, 0664,
+		show_usb_phy_setting, store_usb_phy_setting);*/
+static DEVICE_ATTR(usb_perflock_setting, 0664,
+		show_usb_perflock_setting, store_usb_perflock_setting);
 static DEVICE_ATTR(usb_disable, 0664,
 		NULL, store_usb_disable_setting);
+static DEVICE_ATTR(os_type, 0444, show_os_type, NULL);
+
 static struct attribute *android_htc_usb_attributes[] = {
 	&dev_attr_usb_cable_connect.attr,
 	&dev_attr_usb_function_switch.attr,
@@ -654,8 +826,13 @@ static struct attribute *android_htc_usb_attributes[] = {
 	&dev_attr_usb_serial_number.attr, /* for MFG */
 	&dev_attr_dummy_usb_serial_number.attr, /* for MFG */
 	&dev_attr_usb_car_kit_enable.attr,
-//	&dev_attr_usb_phy_setting.attr,
+	/* &dev_attr_usb_phy_setting.attr, */
+	&dev_attr_usb_perflock_setting.attr,
 	&dev_attr_usb_disable.attr,
+	&dev_attr_os_type.attr,
+#if (defined(CONFIG_USB_OTG) && defined(CONFIG_USB_OTG_HOST))
+	&dev_attr_host_mode.attr,
+#endif
 	NULL
 };
 

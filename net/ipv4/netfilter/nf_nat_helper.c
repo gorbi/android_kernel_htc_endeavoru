@@ -153,14 +153,14 @@ void nf_nat_set_seq_adjust(struct nf_conn *ct, enum ip_conntrack_info ctinfo,
 }
 EXPORT_SYMBOL_GPL(nf_nat_set_seq_adjust);
 
-static void nf_nat_csum(struct sk_buff *skb, struct iphdr *iph, void *data,
+static void nf_nat_csum(struct sk_buff *skb, const struct iphdr *iph, void *data,
 			int datalen, __sum16 *check, int oldlen)
 {
 	struct rtable *rt = skb_rtable(skb);
 
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
 		if (!(rt->rt_flags & RTCF_LOCAL) &&
-		    skb->dev->features & NETIF_F_V4_CSUM) {
+		    (!skb->dev || skb->dev->features & NETIF_F_V4_CSUM)) {
 			skb->ip_summed = CHECKSUM_PARTIAL;
 			skb->csum_start = skb_headroom(skb) +
 					  skb_network_offset(skb) +
@@ -393,11 +393,6 @@ nf_nat_seq_adjust(struct sk_buff *skb,
 
 	this_way = &nat->seq[dir];
 	other_way = &nat->seq[!dir];
-
-#ifdef CONFIG_HTC_NET_MODIFY
-    if (this_way == NULL)
-        printk("[NET] this_way == NULL in %s\n", __func__);
-#endif
 
 	if (!skb_make_writable(skb, ip_hdrlen(skb) + sizeof(*tcph)))
 		return 0;

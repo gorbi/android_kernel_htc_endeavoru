@@ -71,7 +71,7 @@ enum {
 };
 
 
-struct tegra_client_info {
+struct msm_client_info {
 	u8 mesg_id;
 	u16 width;
 	u16 height;
@@ -80,7 +80,7 @@ struct tegra_client_info {
 	u32 ctrl_conf;
 } __attribute__ ((__packed__));
 
-struct tegra_server_info {
+struct msm_server_info {
 	u8 mesg_id;
 	u16 width;
 	u16 height;
@@ -93,8 +93,8 @@ struct htcmode_protocol {
 	u16 version;
 	u16 vendor;
 	u8 request;
-	struct tegra_client_info client_info;
-	struct tegra_server_info server_info;
+	struct msm_client_info client_info;
+	struct msm_server_info server_info;
 	char nonce[HSML_SERVER_NONCE_SIZE];
 	u8 client_sig[HSML_CLIENT_SIG_SIZE];
 	u8 server_sig[HSML_SERVER_SIG_SIZE];
@@ -132,8 +132,5 @@ struct key_event {
     u32 code;
 } __attribute__ ((__packed__));
 
-extern int tegrafb_get_var(struct tegra_fb_info *tmp);
-extern void tegrafb_set_var(unsigned char *addr, int area);
-extern int tegrafb_get_fb_area(void);
 
 #endif /* _HTC_MODE_SERVER_H_ */

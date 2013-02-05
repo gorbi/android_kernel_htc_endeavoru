@@ -226,7 +226,7 @@ ssize_t hciif_write(struct file *file, const char __user *data,
 static long hciif_ioctl(struct file * file, unsigned int cmd,
 					   unsigned long arg)
 {
-	lock_kernel();
+	//lock_kernel();
 	struct sk_buff *skb = NULL;
 	int retCode = HCIIF_SUCCESS;
 	struct hciif_client *client, *tmp;
@@ -236,7 +236,7 @@ static long hciif_ioctl(struct file * file, unsigned int cmd,
 	if ((NULL == file) || (0 == cmd)) {
 		HCIIFDRV_ERR("Invalid input parameters passed to %s",
 					 __func__);
-		unlock_kernel();
+		//unlock_kernel();
 		return -EINVAL;
 	}
 	client = file->private_data;
@@ -307,7 +307,7 @@ static long hciif_ioctl(struct file * file, unsigned int cmd,
 		break;
 	}
 	HCIIFDRV_DBG(" Exit %s", __func__);
-	unlock_kernel();
+	//unlock_kernel();
 	return retCode;
 }
 

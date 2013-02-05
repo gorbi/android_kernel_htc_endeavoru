@@ -20,23 +20,11 @@
 #include <linux/pm.h>
 #include <linux/suspend.h>
 
-#define VENDOR_ID         0x1519
-#define PRODUCT_ID        0x0020
-
-#if defined(CONFIG_MACH_EDGE)\
-	|| defined(CONFIG_MACH_EDGE_TD)\
-	|| defined(CONFIG_MACH_BLUE)\
-	|| defined(CONFIG_MACH_ERAU) \
-	|| defined(CONFIG_MACH_ENDEAVORU)
-
 #include <linux/completion.h>
 #include "gpio-names.h"
 
 #define BB_XMM_OEM1
-
 #define pr_debug pr_info
-
-#endif
 
 #define VENDOR_ID         0x1519
 #define PRODUCT_ID        0x0020
@@ -79,6 +67,9 @@ struct baseband_power_platform_data {
 			int ipc_ap_wake;
 			int ipc_hsic_active;
 			int ipc_hsic_sus_req;
+			int bb_vdd_en;
+			int bb_rst_pwrdn;
+			int bb_rst2;
 			struct platform_device *hsic_device;
 		} xmm;
 	} modem;
@@ -109,6 +100,9 @@ struct baseband_xmm_power_work_t {
 	struct work_struct work;
 	/* xmm modem state */
 	enum baseband_xmm_power_work_state_t state;
+	struct baseband_power_platform_data *pdata;
+	//struct work_struct work;
+	struct platform_device *hsic_device;
 };
 
 enum baseband_xmm_powerstate_t {
@@ -127,9 +121,13 @@ enum baseband_xmm_powerstate_t {
 irqreturn_t baseband_xmm_power_ipc_ap_wake_irq(int irq, void *dev_id);
 
 void baseband_xmm_set_power_status(unsigned int status);
-ssize_t debug_gpio_dump(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t count);
-int trigger_radio_fatal_get_coredump();
+extern struct xmm_power_data xmm_power_drv_data;
+
+int debug_gpio_dump();
+int trigger_radio_fatal_get_coredump(char *reason);
+int trigger_silent_reset(char *reason);
+
+int Modem_is_6360();
+int Modem_is_6260();
 
 #endif  /* BASREBAND_XMM_POWER_H */

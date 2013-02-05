@@ -26,6 +26,7 @@
 #include <linux/workqueue.h>
 #include <mach/htc_battery_core.h>
 #include <linux/android_alarm.h>
+#include <linux/tps80032_charger.h>
 
 static ssize_t htc_battery_show_property(struct device *dev,
 					struct device_attribute *attr,
@@ -84,13 +85,16 @@ struct htc_battery_core_info {
 
 static struct htc_battery_core_info battery_core_info;
 static int battery_register = 1;
+#if 0	/* note: old mechanism */
 static int battery_over_loading;
+#endif
 
 static struct alarm batt_charger_ctrl_alarm;
 static struct work_struct batt_charger_ctrl_work;
 struct workqueue_struct *batt_charger_ctrl_wq;
 static unsigned int charger_ctrl_stat;
 static unsigned int phone_call_stat;
+static unsigned int navigation_stat;
 
 static enum power_supply_property htc_battery_properties[] = {
 	POWER_SUPPLY_PROP_STATUS,
@@ -317,6 +321,17 @@ static ssize_t htc_battery_phone_call_stat(struct device *dev,
 	return i;
 }
 
+static ssize_t htc_battery_navigation_stat(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	int i = 0;
+
+	i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", navigation_stat);
+
+	return i;
+}
+
 static ssize_t htc_battery_charger_switch(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
@@ -367,6 +382,13 @@ static ssize_t htc_battery_charger_switch(struct device *dev,
 			return rc;
 		}
 		charger_ctrl_stat = DISABLE_LIMIT_CHARGER;
+	} else if (enable == ENABLE_HIZ) {
+		rc = battery_core_info.func.func_charger_control(
+							    ENABLE_HIZ);
+		if (rc) {
+			BATT_LOG("enable hiz fail!");
+			return rc;
+		}
 	}
 
 	alarm_cancel(&batt_charger_ctrl_alarm);
@@ -392,6 +414,28 @@ static ssize_t htc_battery_phone_call_switch(struct device *dev,
 
 	battery_core_info.func.func_phone_call_notification(phone_call);
 	phone_call_stat = phone_call;
+
+	return count;
+}
+
+static ssize_t htc_battery_navigation_switch(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	unsigned long navigation = 0;
+	int rc = 0;
+
+	rc = strict_strtoul(buf, 10, &navigation);
+	if (rc)
+		return rc;
+
+	if (!battery_core_info.func.func_navigation_notification) {
+		BATT_ERR("No navigation notification function!");
+		return -ENOENT;
+	}
+
+	battery_core_info.func.func_navigation_notification(navigation);
+	navigation_stat = navigation;
 
 	return count;
 }
@@ -423,6 +467,8 @@ static struct device_attribute htc_set_delta_attrs[] = {
 		htc_battery_charger_ctrl_timer),
 	__ATTR(phone_call, S_IWUSR | S_IWGRP, htc_battery_phone_call_stat,
 		htc_battery_phone_call_switch),
+	__ATTR(navigation, S_IWUSR | S_IWGRP, htc_battery_navigation_stat,
+		htc_battery_navigation_switch),
 };
 
 static int htc_battery_create_attrs(struct device *dev)
@@ -448,7 +494,7 @@ htc_attrs_failed:
 		device_remove_file(dev, &htc_battery_attrs[i]);
 htc_delta_attrs_failed:
 	while (j--)
-		device_remove_file(dev, &htc_set_delta_attrs[i]);
+		device_remove_file(dev, &htc_set_delta_attrs[j]);
 succeed:
 	return rc;
 }
@@ -592,6 +638,19 @@ static ssize_t htc_battery_show_property(struct device *dev,
 			__func__, off);
 
 	return i;
+}
+
+int htc_battery_charger_hiz(void)
+{
+	int rc = 0;
+
+	rc = battery_core_info.func.func_charger_control(
+			ENABLE_HIZ);
+	if (rc) {
+		BATT_LOG("enable hiz fail!");
+	}
+
+	return rc;
 }
 
 static ssize_t htc_battery_charger_ctrl_timer(struct device *dev,
@@ -787,6 +846,12 @@ int htc_battery_core_update(void)
 }
 EXPORT_SYMBOL_GPL(htc_battery_core_update);
 
+int htc_battery_is_charging_full(void)
+{
+	return battery_core_info.htc_charge_full;
+}
+EXPORT_SYMBOL_GPL(htc_battery_is_charging_full);
+
 int htc_battery_core_register(struct device *dev,
 				struct htc_battery_core *htc_battery)
 {
@@ -820,6 +885,10 @@ int htc_battery_core_register(struct device *dev,
 	if (htc_battery->func_phone_call_notification)
 		battery_core_info.func.func_phone_call_notification =
 					htc_battery->func_phone_call_notification;
+
+	if (htc_battery->func_navigation_notification)
+		battery_core_info.func.func_navigation_notification =
+					htc_battery->func_navigation_notification;
 
 	/* init power supplier framework */
 	for (i = 0; i < ARRAY_SIZE(htc_power_supplies); i++) {

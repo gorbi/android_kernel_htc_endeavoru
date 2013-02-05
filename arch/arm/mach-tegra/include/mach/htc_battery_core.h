@@ -54,13 +54,16 @@ struct htc_battery_core {
 	int (*func_charger_control)(enum charger_control_flag);
 	void (*func_set_full_level)(int full_level);
 	void (*func_phone_call_notification)(int phone_call);
+	void (*func_navigation_notification)(int navigation);
 };
 
 #ifdef CONFIG_HTC_BATT_CORE
 extern int htc_battery_core_update(void);
+extern int htc_battery_is_charging_full(void);
 extern int htc_battery_core_register(struct device *dev, struct htc_battery_core *htc_battery);
 #else
 static int htc_battery_core_update(void) { return 0; }
+extern int htc_battery_is_charging_full(void) { return 0; }
 static int htc_battery_core_register(struct device *dev, struct htc_battery_core *htc_battery) { return 0; }
 #endif
 #endif

@@ -39,6 +39,8 @@
 #include <linux/notifier.h>
 #include <linux/suspend.h>
 #include "../../../arch/arm/mach-tegra/board.h"
+#include <mach/mfootprint.h>
+
 
 #define debug_flag 0
 #define D(x...) pr_info(x)
@@ -137,7 +139,7 @@ static uint8_t ps_offset_adc;
 static uint8_t ps_offset_adc2;
 struct cm3628_info *lp_info;
 int enable_log;
-static struct mutex als_enable_mutex, als_disable_mutex, als_flag_mutex,  
+static struct mutex als_enable_mutex, als_disable_mutex, als_flag_mutex,
 					als_get_adc_mutex, ps_report_input_mutex;
 static int lightsensor_enable(struct cm3628_info *lpi);
 static int lightsensor_disable(struct cm3628_info *lpi);
@@ -1883,10 +1885,11 @@ static void cm3628_early_suspend(struct early_suspend *h)
 	struct cm3628_info *lpi = lp_info;
 
 	D("[LS][CM3628] %s\n", __func__);
-
+	MF_DEBUG("00020000");
 	if (lpi->als_enable)
 		lightsensor_disable(lpi);
-
+	
+	MF_DEBUG("00020001");
 }
 
 static void cm3628_late_resume(struct early_suspend *h)

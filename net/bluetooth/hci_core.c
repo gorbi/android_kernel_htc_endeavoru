@@ -1002,12 +1002,8 @@ void hci_free_dev(struct hci_dev *hdev)
 }
 EXPORT_SYMBOL(hci_free_dev);
 
-// TODO: this function will pull BT_EN high after boot, walkaround first.
 static void hci_power_on(struct work_struct *work)
 {
-#if 1
-	return;
-#else
 	struct hci_dev *hdev = container_of(work, struct hci_dev, power_on);
 
 	BT_DBG("%s", hdev->name);
@@ -1021,15 +1017,10 @@ static void hci_power_on(struct work_struct *work)
 
 	if (test_and_clear_bit(HCI_SETUP, &hdev->flags))
 		mgmt_index_added(hdev);
-#endif
 }
 
-// TODO: this function will pull BT_EN high after boot, walkaround first.
 static void hci_power_off(struct work_struct *work)
 {
-#if 1
-	return;
-#else
 	struct hci_dev *hdev = container_of(work, struct hci_dev,
 							power_off.work);
 
@@ -1038,7 +1029,6 @@ static void hci_power_off(struct work_struct *work)
 	clear_bit(HCI_AUTO_OFF, &hdev->flags);
 
 	hci_dev_close(hdev->id);
-#endif
 }
 
 static void hci_discov_off(struct work_struct *work)

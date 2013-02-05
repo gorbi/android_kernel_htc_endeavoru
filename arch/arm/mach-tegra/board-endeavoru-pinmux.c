@@ -488,31 +488,8 @@ int __init endeavoru_pinmux_init(void)
 	tegra_drive_pinmux_config_table(endeavoru_drive_pinmux,
 					ARRAY_SIZE(endeavoru_drive_pinmux));
 
-	if (machine_is_erau())
-	{
-		// era#u XA == end#u XE
-		if (htc_get_pcbid_info() >= PROJECT_PHASE_XA)
-			board_id = PROJECT_PHASE_XE;
-	}
-	else // default case, included machine_is_endeavoru()
 		board_id = htc_get_pcbid_info();
 
-	if (board_id == PROJECT_PHASE_EVM) // EVM
-		tegra_pinmux_config_table(endeavoru_pinmux_EVM,
-			ARRAY_SIZE(endeavoru_pinmux_EVM));
-	else if (board_id == PROJECT_PHASE_XA) // EVT XA
-		tegra_pinmux_config_table(endeavoru_pinmux_EVT_XA,
-			ARRAY_SIZE(endeavoru_pinmux_EVT_XA));
-	else if (board_id == PROJECT_PHASE_XB) // EVT XB
-		tegra_pinmux_config_table(endeavoru_pinmux_EVT_XB,
-			ARRAY_SIZE(endeavoru_pinmux_EVT_XB));
-	else if (board_id == PROJECT_PHASE_XC) // XC
-		tegra_pinmux_config_table(endeavoru_pinmux_EVT_XC,
-			ARRAY_SIZE(endeavoru_pinmux_EVT_XC));
-	else if (board_id == PROJECT_PHASE_XD) // XD
-		tegra_pinmux_config_table(endeavoru_pinmux_EVT_XD,
-			ARRAY_SIZE(endeavoru_pinmux_EVT_XD));
-	else // latest project phase
 		tegra_pinmux_config_table(endeavoru_pinmux_EVT_XE,
 			ARRAY_SIZE(endeavoru_pinmux_EVT_XE));
 

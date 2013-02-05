@@ -24,8 +24,8 @@
 #include <linux/syscalls.h>
 #include <linux/hrtimer.h>
 #include <linux/nct1008.h>
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD) || defined(CONFIG_MACH_ERAU)
-	#include <linux/leds-lp5521_htc.h>
+#if defined(CONFIG_LEDS_LP5521_HTC)
+#include <linux/leds-lp5521_htc.h>
 #endif
 #include <mach/board_htc.h>
 #include <mach/restart.h>
@@ -79,7 +79,7 @@ static enum hrtimer_restart led_timer_func(struct hrtimer *timer)
 	if (power_off_led_requested == 1) {
 		power_off_led_requested = 2;
 		pr_info("[PWR] power off led turn on\n");
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
+#if defined(CONFIG_LEDS_LP5521_HTC)
 		lp5521_led_current_set_for_key(1);
 #endif
 	}
@@ -141,7 +141,7 @@ static void keyreset_event(struct input_handle *handle, unsigned int type,
 					pr_info("[PWR] start count for power reset\n");
 					hrtimer_start(&reset_timer, ktime_set(5,500000000), HRTIMER_MODE_REL);
 					power_reset_requested = 1;
-				}
+	}
 			}
 			pr_info("[PWR] start count for read temp\n");
 			hrtimer_start(&temp_timer, ktime_set(5,0), HRTIMER_MODE_REL);
@@ -156,9 +156,9 @@ static void keyreset_event(struct input_handle *handle, unsigned int type,
 
 				if (power_off_led_requested == 2) {
 					pr_info("[PWR] power off led turn off\n");
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
+			#if defined(CONFIG_LEDS_LP5521_HTC)
 					lp5521_led_current_set_for_key(0);
-#endif
+			#endif
 				}
 				power_off_led_requested = 0;
 			}
@@ -171,7 +171,7 @@ static void keyreset_event(struct input_handle *handle, unsigned int type,
 							pr_info("[PWR] cancel power reset timer, timer has done (%x).\n", power_reset_requested);
 						if ( power_reset_requested == 2 ) {
 							pr_info("[PWR] reset device\n");
-							schedule_work(&restart_work);
+			schedule_work(&restart_work);
 						}
 						power_reset_requested = 0;
 					}
@@ -212,14 +212,7 @@ static int keyreset_connect(struct input_handler *handler,
 	if (i == KEY_MAX)
 		return -ENODEV;
 
-	hrtimer_init(&led_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	led_timer.function = led_timer_func;
-#if defined(CONFIG_MACH_ENDEAVORU) || defined(CONFIG_MACH_ENDEAVORTD)
-	hrtimer_init(&reset_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	reset_timer.function = power_reset_func;
-#endif
-	hrtimer_init(&temp_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	temp_timer.function = temp_timer_func;
+
 
 	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
 	if (!handle)
@@ -296,6 +289,15 @@ static int keyreset_probe(struct platform_device *pdev)
 			__set_bit(key, state->upbit);
 		}
 	}
+
+	hrtimer_init(&led_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	led_timer.function = led_timer_func;
+#if defined(CONFIG_INPUT_POWERKEY_RESET_PATCH)
+	hrtimer_init(&reset_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	reset_timer.function = power_reset_func;
+#endif
+	hrtimer_init(&temp_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	temp_timer.function = temp_timer_func;
 
 	if (pdata->reset_fn)
 		state->reset_fn = pdata->reset_fn;

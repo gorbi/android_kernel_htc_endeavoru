@@ -23,10 +23,12 @@
 #define SYNAPTICS_3K_NAME "synaptics-3k"
 #define SYNAPTICS_3K_INCELL_NAME "synaptics-3k-incell"
 #define SYNAPTICS_3200_NAME "synaptics-3200"
+#define SYNAPTICS_FW_3_2_PACKRAT 1115999
+#define SYNAPTICS_FW_NOCAL_PACKRAT 1293981
 
 
 #define SYN_CONFIG_SIZE 32 * 16
-#define SYN_MAX_PAGE 2
+#define SYN_MAX_PAGE 4
 #define SYN_BL_PAGE 1
 #define SYN_F01DATA_BASEADDR 0x0013
 #define SYN_PROCESS_ERR -1
@@ -74,6 +76,8 @@ struct synaptics_i2c_rmi_platform_data {
 	int (*power)(int on);	/* Only valid in first array entry */
 	struct synaptics_virtual_key *virtual_key;
 	uint8_t virtual_key_num;
+	struct kobject *vk_obj;
+	struct kobj_attribute *vk2Use;
 	uint8_t sensitivity;
 	uint8_t finger_support;
 	uint32_t gap_area;
@@ -122,8 +126,15 @@ struct synaptics_i2c_rmi_platform_data {
 	uint8_t support_htc_event;
 	uint8_t mfg_flag;
 	uint8_t customer_register[CUS_REG_SIZE];
+	uint8_t segmentation_bef_unlock;
+	uint8_t threshold_bef_unlock;
+	uint16_t saturation_bef_unlock;
+	uint8_t i2c_err_handler_en;
 	int source;
 	void (*notifyFinger)(int on);
+	uint8_t energy_ratio_relaxation;
+	uint8_t multitouch_calibration;
+	uint8_t psensor_detection;
 };
 
 struct page_description {

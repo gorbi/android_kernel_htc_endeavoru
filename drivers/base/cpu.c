@@ -15,8 +15,8 @@
 
 #include "base.h"
 
+static struct workqueue_struct *cpuplug_wq;
 static struct work_struct cpuplug_work;
-extern struct workqueue_struct *cpuplug_wq;
 
 static struct sysdev_class_attribute *cpu_sysdev_class_attrs[];
 
@@ -45,7 +45,7 @@ static void tegra_cpuplug_work_func(struct work_struct *work)
 	if(should_on_cpu <= 0)
 		return;
 
-	for (cpu = 0; cpu < 4, should_on_cpu != 0; cpu++) {
+	for (cpu = 3; cpu > 0 , should_on_cpu != 0; cpu--) {
 		if (!cpu_online(cpu)) {
 			cpu_up(cpu);
 			pr_info("[cpu] cpu %d is on", cpu);
@@ -334,7 +334,11 @@ int __init cpu_dev_init(void)
 		err = sched_create_sysfs_power_savings_entries(&cpu_sysdev_class);
 #endif
 
-	INIT_WORK(&cpuplug_work, tegra_cpuplug_work_func);
+	cpuplug_wq = alloc_workqueue(
+                "cpu-plug", WQ_UNBOUND | WQ_RESCUER | WQ_FREEZABLE, 1);
+        if (!cpuplug_wq)
+                return -ENOMEM;
+        INIT_WORK(&cpuplug_work, tegra_cpuplug_work_func);
 
 	return err;
 }

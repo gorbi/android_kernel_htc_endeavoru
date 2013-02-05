@@ -175,24 +175,41 @@ static int tps80032_adc_wait_conversion_ready_locked(
 {
 	unsigned long timeout;
 	int ret;
-	u8 reg_value;
+	u8 reg_value[3];
 
 	CHECK_LOG();
 
 	timeout = jiffies + msecs_to_jiffies(timeout_ms);
 	do {
 		ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
-					TPS80032_CTRL_P1, &reg_value);
+					TPS80032_CTRL_P1, &reg_value[0]);
 		if (ret < 0) {
 			pr_err("%s:read CTRL_P1 fail\n", __func__);
 			return ret;
 		}
 
-		if (!(reg_value & CP_BUSY_BIT)
-			&& (reg_value & CP_ECOCP1_BIT))
+		if (!(reg_value[0] & CP_BUSY_BIT)
+			&& (reg_value[0] & CP_ECOCP1_BIT))
 			return 0;
 	} while(!time_after(jiffies, timeout));
-	
+
+	ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+			TPS80032_GPSELECT_ISB, &reg_value[1]);
+	if (ret < 0) {
+		pr_err("%s:read TPS80032_GPSELECT_ISB fail\n", __func__);
+		return ret;
+	}
+
+	ret = tps80031_read(adc_data->parent_dev, SLAVE_ID2,
+			TPS80032_GPCH0_MSB, &reg_value[2]);
+	if (ret < 0) {
+		pr_err("%s:read register GPCH0_MSB fail\n", __func__);
+		return ret;
+	}
+
+	pr_info("adc conversion timeout: CTRL_P1:0x%X, GPSELECT:0x%X GPCH0_MSB:0x%X\n"
+			, reg_value[0], reg_value[1], reg_value[2]);
+
 	return -EAGAIN;
 }
 
@@ -200,7 +217,7 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 {
 	u8 read_reg_value;
 	int temp;
-	int ret;
+	int ret, i;
 
 	CHECK_LOG();
 
@@ -230,8 +247,12 @@ int32_t tps80032_adc_select_and_read(int32_t *result, u8 channel)
 					, __func__);
 			goto write_i2c_adc_fail;
 		}
-		
-		ret = tps80032_adc_wait_conversion_ready_locked(5);
+
+		i = 0;
+		do {
+			ret = tps80032_adc_wait_conversion_ready_locked(5);
+		} while (ret != 0 && ++i < 5);
+
 		if (ret < 0) {
 			pr_err("%s:conversion fail or timeout\n"
 					, __func__);

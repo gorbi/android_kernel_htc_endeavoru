@@ -31,7 +31,7 @@
 #define MHL_INTERNAL_POWER  1
 static bool g_vbus = 0;
 static bool g_desk_no_power = 0;
-static bool g_deskConnect = 0;
+static bool g_hostInternal = 0;
 
 static struct switch_dev dock_switch = {
 	.name = "dock",
@@ -71,6 +71,15 @@ struct cable_detect_info {
 
 	u8 mhl_internal_3v3;
 
+	/* for charger reset chip */
+	struct delayed_work wdt_work;
+	int reset_en_clr_gpio;
+	int chg_wdt_en_gpio;
+	bool enable_reset_wdt;
+
+	struct delayed_work mhl_internal_work;
+	int mhl_charger_type;
+
 #ifdef CONFIG_CABLE_DETECT_GPIO_DOCK
 	bool dock_detect;
 	int dockpin_irq;
@@ -96,6 +105,8 @@ static void dock_detect_work(struct work_struct *w);
 static void dock_detect_init(struct cable_detect_info *pInfo);
 #endif
 
+static void enable_usb_reset_wdt(struct work_struct *w);
+extern bool g_bMhlProbe;
 int usb_get_vbus_value(void)
 {
 	extern int tps80031_vbus_on;
@@ -184,38 +195,29 @@ static void check_vbus_in(struct work_struct *w)
 			case DOCK_STATE_DESK:
 				if (g_desk_no_power) {
 					if (gpio_get_value(pInfo->usb_id_pin_gpio)) {
-						if (!g_deskConnect)
-							break;
 						CABLE_INFO("%s: Cradle removed [ID]\n", __func__);
 						g_desk_no_power = 0;
 						switch_set_state(&dock_switch, DOCK_STATE_UNDOCKED);
-						g_deskConnect = false;
 						pInfo->accessory_type = DOCK_STATE_UNDOCKED;
 						irq_set_irq_type(pInfo->idpin_irq, IRQF_TRIGGER_LOW);
 						enable_irq(pInfo->idpin_irq);
 					}
 					else {
-						if (g_deskConnect)
-							break;
 						CABLE_INFO("%s: Cradle inserted\n", __func__);
 						switch_set_state(&dock_switch, DOCK_STATE_DESK);
 						g_desk_no_power = 0;
-						g_deskConnect = true;
 					}
 				}
 				break;
 			default:
 				break;
-	}
+		}
 	}
 	else {
 		switch (pInfo->accessory_type) {
 			case DOCK_STATE_DESK:
-				if (!g_deskConnect)
-					break;
 				CABLE_INFO("%s: Cradle removed\n", __func__);
 				switch_set_state(&dock_switch, DOCK_STATE_UNDOCKED);
-				g_deskConnect = false;
 				pInfo->accessory_type = DOCK_STATE_UNDOCKED;
 				irq_set_irq_type(pInfo->idpin_irq, IRQF_TRIGGER_LOW);
 				enable_irq(pInfo->idpin_irq);
@@ -331,6 +333,12 @@ static int cable_detect_get_type(struct cable_detect_info *pInfo)
 	return (stable_count >= ADC_RETRY) ? type : -2;
 }
 
+struct delayed_work resume_remove_host_mode_work;
+static void resume_remove_host_mode(struct work_struct *data)
+{
+	send_usb_host_connect_notify(0);
+}
+
 static void cable_detect_handler(struct work_struct *w)
 {
 	struct cable_detect_info *pInfo = container_of(
@@ -366,7 +374,6 @@ static void cable_detect_handler(struct work_struct *w)
 		CABLE_INFO("Cradle inserted\n");
 		if (usb_get_vbus_value()) {
 			switch_set_state(&dock_switch, DOCK_STATE_DESK);
-			g_deskConnect = true;
 			pInfo->accessory_type = DOCK_STATE_DESK;
 		}
 		else {
@@ -393,11 +400,14 @@ static void cable_detect_handler(struct work_struct *w)
 #endif
 #ifdef CONFIG_TEGRA_HDMI_MHL
 	case DOCK_STATE_MHL:
+		if(!g_bMhlProbe) {
+			CABLE_INFO("Drv: Sii9244 not ready, OMIT MHL insert g_bMhlProbe(%d)\n",g_bMhlProbe);
+			break;
+		}
 		CABLE_INFO("MHL inserted\n");
 		switch_set_state(&dock_switch, DOCK_STATE_MHL);
 		pInfo->accessory_type = DOCK_STATE_MHL;
 		pInfo->usb_dpdn_switch(PATH_MHL);
-		g_vbus = usb_get_vbus_value();
 #ifdef MHL_INTERNAL_POWER
 		if (pInfo->mhl_internal_3v3) {
 			if (g_vbus)
@@ -405,6 +415,7 @@ static void cable_detect_handler(struct work_struct *w)
 			else {
 				CABLE_INFO("MHL internal power\n");
 				send_cable_connect_notify(CONNECT_TYPE_INTERNAL);
+				g_hostInternal = 1;
 			}
 		}
 		else {
@@ -421,6 +432,10 @@ static void cable_detect_handler(struct work_struct *w)
 #if (defined(CONFIG_USB_OTG) && defined(CONFIG_USB_OTG_HOST))
 	case DOCK_STATE_USB_HOST:
 		CABLE_INFO("USB Host inserted\n");
+		if (!usb_get_vbus_value()) {
+			send_cable_connect_notify(CONNECT_TYPE_INTERNAL);
+			g_hostInternal = 1;
+		}
 		send_usb_host_connect_notify(1);
 		pInfo->accessory_type = DOCK_STATE_USB_HOST;
 		break;
@@ -471,7 +486,11 @@ static void cable_detect_handler(struct work_struct *w)
 		case DOCK_STATE_USB_HOST:
 			CABLE_INFO("USB Host removed\n");
 			pInfo->accessory_type = DOCK_STATE_UNDOCKED;
-			send_usb_host_connect_notify(0);
+			schedule_delayed_work(&resume_remove_host_mode_work, 1*HZ);
+			if (g_hostInternal) {
+				send_cable_connect_notify(CONNECT_TYPE_CLEAR);
+				g_hostInternal = 0;
+			}
 			break;
 #endif
 #if 0  /* DMB */
@@ -491,10 +510,10 @@ static void cable_detect_handler(struct work_struct *w)
 	CABLE_INFO("%s ID pin %d, type %d\n", __func__, value, pInfo->accessory_type);
 
 #ifdef CONFIG_TEGRA_HDMI_MHL
-	if (pInfo->accessory_type == DOCK_STATE_MHL)
+	if (pInfo->accessory_type == DOCK_STATE_MHL && g_bMhlProbe)
 		return;
 #endif
-	if (g_vbus && pInfo->accessory_type != DOCK_STATE_UNDOCKED) {
+	if (usb_get_vbus_value() && pInfo->accessory_type != DOCK_STATE_UNDOCKED && pInfo->accessory_type != DOCK_STATE_USB_HOST) {
 		if (cable_detection_ac_only())
 			send_cable_connect_notify(CONNECT_TYPE_AC);
 		else
@@ -551,9 +570,11 @@ static int sec_detect(struct cable_detect_info *pInfo)
 	adc_value = cable_detect_get_adc();
 	CABLE_INFO("[2] accessory adc = %d\n", adc_value);
 
-	if (adc_value >= 1000 && adc_value < 1200)
+	/* only ENR#U support DOCK */
+	/* reset the value for ENR#U and set 1022 to avoid dock be detected as host dongle */
+	if (adc_value >= 1022 && adc_value < 1200)
 		type = DOCK_STATE_DESK;
-	else if ((adc_value >= 800 && adc_value < 1000) || pInfo->mhl_version_ctrl_flag)
+	else if ((adc_value >= 776 && adc_value <= 1021) || pInfo->mhl_version_ctrl_flag)
 #ifdef CONFIG_TEGRA_HDMI_MHL
 		type = DOCK_STATE_MHL;
 #else
@@ -605,6 +626,7 @@ static irqreturn_t usbid_interrupt(int irq, void *data)
 	disable_irq_nosync(pInfo->idpin_irq);
 	pInfo->cable_detecting = 1;
 	pInfo->cable_redetect = 0;
+	g_vbus = usb_get_vbus_value();
 	CABLE_INFO("usb: id interrupt\n");
 	queue_delayed_work(pInfo->cable_detect_wq, &pInfo->cable_detect_work, ADC_DELAY);
 	return IRQ_HANDLED;
@@ -631,7 +653,7 @@ static void usb_id_detect_init(struct cable_detect_info *pInfo)
 		CABLE_ERR("%s: request_irq failed\n", __func__);
 		return;
 	}
-#if 0 /* IRQ Wake */
+#if 1 /* IRQ Wake */
 	ret = enable_irq_wake(pInfo->idpin_irq);
 	if (ret < 0) {
 		CABLE_ERR("%s: set_irq_wake failed\n", __func__);
@@ -647,16 +669,27 @@ static void usb_id_detect_init(struct cable_detect_info *pInfo)
 		if (gpio_get_value(pInfo->usb_id_pin_gpio)) {
 			CABLE_INFO("%s: ID(H) no accessory\n", __func__);
 			gpio_set_value(pInfo->mhl_reset_gpio, 1);
-			SwitchToD3_Force();
+			TPI_Init();
 		}
 	}
 #endif
 	CABLE_INFO("%s: ID=%d, IRQ=0x%x", __func__, pInfo->usb_id_pin_gpio, pInfo->idpin_irq);
 	return;
-#if 0 /* IRQ Wake */
+#if 1 /* IRQ Wake */
 err:
 	free_irq(pInfo->idpin_irq, 0);
 #endif
+}
+
+static void mhl_internal_notify(struct work_struct *w)
+{
+	struct cable_detect_info *pInfo = &the_cable_info;
+	int charging_type;
+	if (!pInfo)
+		return;
+	CABLE_INFO("%s: ,mhl_charger_type:%d \n", __func__, pInfo->mhl_charger_type);
+	charging_type = pInfo->mhl_charger_type;
+	send_cable_connect_notify(charging_type);
 }
 
 #ifdef CONFIG_TEGRA_HDMI_MHL
@@ -703,10 +736,19 @@ static void mhl_status_notifier_func(bool isMHL, int charging_type)
 	}
 	else {
 		mhl_connected = 1;
+		pInfo->mhl_charger_type = charging_type;
 		irq_set_irq_type(pInfo->idpin_irq, id_pin ? IRQF_TRIGGER_LOW : IRQF_TRIGGER_HIGH);
 #if 1
 		if (g_vbus && (charging_type > CONNECT_TYPE_NONE))
 			send_cable_connect_notify(charging_type);
+
+		/* if MHL uses internal power then plug in AC/USB , PMIC vbus is still 0
+		 * Need send clear notification to battery and then send mhl charger type to battery*/
+		if (g_hostInternal && charging_type != CONNECT_TYPE_INTERNAL) {
+			send_cable_connect_notify(CONNECT_TYPE_CLEAR);
+			g_hostInternal = 0;
+			queue_delayed_work(pInfo->cable_detect_wq, &pInfo->mhl_internal_work, 1*HZ);
+		}
 #endif
 #if 0
 #ifdef MHL_INTERNAL_POWER
@@ -799,6 +841,7 @@ static void dock_detect_init(struct cable_detect_info *pInfo)
 		enable_irq(pInfo->dockpin_irq);
 }
 #endif // CONFIG_CABLE_DETECT_GPIO_DOCK
+
 static ssize_t vbus_status_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	int vbus_in = 0;
@@ -899,11 +942,17 @@ static int cable_detect_probe(struct platform_device *pdev)
 
 		if (pInfo->config_usb_id_gpios)
 			pInfo->config_usb_id_gpios(0);
+
 #endif
 #ifdef CONFIG_CABLE_DETECT_GPIO_DOCK
 		pInfo->dock_detect = pdata->dock_detect;
 		pInfo->dock_pin_gpio = pdata->dock_pin_gpio;
 #endif
+		pInfo->reset_en_clr_gpio = pdata->reset_en_clr_gpio;
+		pInfo->chg_wdt_en_gpio = pdata->chg_wdt_en_gpio;
+		if (pdata->enable_reset_wdt)
+			pInfo->enable_reset_wdt = pdata->enable_reset_wdt;
+
 #if 0 /* Wireless Charger */
 		if (pdata->is_wireless_charger)
 			pInfo->is_wireless_charger = pdata->is_wireless_charger;
@@ -913,6 +962,7 @@ static int cable_detect_probe(struct platform_device *pdev)
 #endif
 		INIT_DELAYED_WORK(&pInfo->vbus_detect_work, check_vbus_in);
 		INIT_DELAYED_WORK(&pInfo->recovery_host_work, recovery_host_mode);
+		INIT_DELAYED_WORK(&resume_remove_host_mode_work, resume_remove_host_mode);
 
 		pInfo->cable_detect_wq = create_workqueue("cable_detect");
 		if (pInfo->cable_detect_wq == 0) {
@@ -942,6 +992,8 @@ static int cable_detect_probe(struct platform_device *pdev)
 			set_irq_wake(pdata->vbus_mpp_irq, 1);
 		}
 #endif
+		if (pdata->enable_reset_wdt)
+			INIT_DELAYED_WORK(&pInfo->wdt_work, enable_usb_reset_wdt);
 	}
 	if (switch_dev_register(&dock_switch) < 0) {
 		CABLE_ERR("fail to register dock switch!\n");
@@ -975,6 +1027,9 @@ static int cable_detect_probe(struct platform_device *pdev)
 		dock_detect_init(pInfo);
 	}
 #endif
+
+	INIT_DELAYED_WORK(&pInfo->mhl_internal_work, mhl_internal_notify);
+
 	CABLE_INFO("%s: Done\n", __func__);
 	return 0;
 }
@@ -1048,20 +1103,35 @@ void cable_detection_queue_recovery_host_work(int time)
 }
 EXPORT_SYMBOL(cable_detection_queue_recovery_host_work);
 
+void clear_usb_reset_wdt()
+{
+	struct cable_detect_info *pInfo = &the_cable_info;
+	if (pInfo->reset_en_clr_gpio > 0) {
+		if (gpio_direction_output(pInfo->reset_en_clr_gpio, 0) < 0)
+			pr_info("[CABLE] %s: GPIO RESET_EN_CLR(%d) dir NG %d\n", __func__,pInfo->reset_en_clr_gpio);
+		else
+			pr_info("[CABLE] %s: GPIO RESET_EN_CLR(%d) O(L) ok %d\n", __func__,pInfo->reset_en_clr_gpio);
+	}
+}
+void enable_usb_reset_wdt(struct work_struct *w)
+{
+	struct cable_detect_info *pInfo = &the_cable_info;
+	if (pInfo->reset_en_clr_gpio > 0) {
+		if (gpio_direction_input(pInfo->reset_en_clr_gpio) < 0)
+			pr_info("[CABLE] %s: GPIO RESET_EN_CLR(%d) set input NG\n", __func__,pInfo->reset_en_clr_gpio);
+		else
+			pr_info("[CABLE] %s: GPIO RESET_EN_CLR(%d) set input ok \n", __func__,pInfo->reset_en_clr_gpio);
+	}
+}
 void cable_detection_queue_vbus_work(int time)
 {
-	int ret;
 	struct cable_detect_info *pInfo = &the_cable_info;
-	CABLE_INFO("%s\n", __func__);
 
 	if (pInfo->cable_detect_wq)
-	{
-		ret = queue_delayed_work(pInfo->cable_detect_wq, &pInfo->vbus_detect_work, time);
-		if (ret == 0) {
-			CABLE_INFO("%s: vbus detect debounce\n", __func__);
-			cancel_delayed_work(&pInfo->vbus_detect_work);
-		        queue_delayed_work(pInfo->cable_detect_wq, &pInfo->vbus_detect_work, time);
-		}
+		queue_delayed_work(pInfo->cable_detect_wq, &pInfo->vbus_detect_work, time);
+	if (htc_get_pcbid_info() == PROJECT_PHASE_XA && pInfo->enable_reset_wdt) {
+		clear_usb_reset_wdt();
+		queue_delayed_work(pInfo->cable_detect_wq, &pInfo->wdt_work, 7*HZ);
 	}
 }
 EXPORT_SYMBOL(cable_detection_queue_vbus_work);

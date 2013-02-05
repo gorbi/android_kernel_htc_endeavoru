@@ -37,6 +37,7 @@
 #include <linux/wakelock.h>
 #include <linux/jiffies.h>
 #include "../../../arch/arm/mach-tegra/board.h"
+#include <mach/mfootprint.h>
 
 #define debug_flag 0
 #define D(x...) pr_info(x)
@@ -64,6 +65,7 @@ static DECLARE_DELAYED_WORK(polling_work, polling_do_work);
 static uint8_t sensor_chipId[3] = {0};
 static void report_near_do_work(struct work_struct *w);
 static DECLARE_DELAYED_WORK(report_near_work, report_near_do_work);
+static int plsensor_chip_state;
 
 struct cm3629_info {
 	struct class *cm3629_class;
@@ -136,6 +138,7 @@ struct cm3629_info {
 	uint8_t ps2_adc_offset;
 	uint8_t ps_debounce;
 	uint16_t ps_delay_time;
+	uint8_t dark_level;
 };
 
 static uint8_t ps1_canc_set;
@@ -145,11 +148,15 @@ static uint8_t ps2_offset_adc;
 static struct cm3629_info *lp_info;
 int enable_cm3629_log;
 int f_cm3629_level = -1;
-static struct mutex als_enable_mutex, als_disable_mutex, als_flag_mutex, 
+static struct mutex als_enable_mutex, als_disable_mutex, als_flag_mutex,
 					als_get_adc_mutex, ps_report_input_mutex;
+static struct mutex ps_enable_mutex;
+static int ps_hal_enable, ps_drv_enable;
 static int lightsensor_enable(struct cm3629_info *lpi);
 static int lightsensor_disable(struct cm3629_info *lpi);
 static void psensor_initial_cmd(struct cm3629_info *lpi);
+static int ps_near;
+static int pocket_mode_flag,psensor_enable_by_touch;
 #if (0)
 static int I2C_RxData(uint16_t slaveAddr, uint8_t *rxData, int length)
 {
@@ -520,7 +527,7 @@ static void report_psensor_input_event(struct cm3629_info *lpi, int interrupt_fl
 	uint8_t ps1_adc = 0;
 	uint8_t ps2_adc = 0;
 	int val, ret = 0;
-
+	int index = 0;
 	if (interrupt_flag > 1 && lpi->ps_enable == 0) {
 		D("[PS][cm3629] P-sensor disable but intrrupt occur, "
 		  "record_init_fail %d.\n", record_init_fail);
@@ -534,7 +541,20 @@ static void report_psensor_input_event(struct cm3629_info *lpi, int interrupt_fl
 	/* D("%s: j_end = %lu", __func__, lpi->j_end); */
 
 	ret = get_ps_adc_value(&ps1_adc, &ps2_adc);
-
+	D("[PS][cm3629] pocket mode flag is %d psensor_enable_by_touch flag is%d\n",pocket_mode_flag,psensor_enable_by_touch);
+	if(pocket_mode_flag == 1 || psensor_enable_by_touch == 1){
+		D("[PS][cm3629] pocket_mode_flag is %d\n",pocket_mode_flag);
+		while(index <=10 && ps1_adc == 0){
+			D("[PS][cm3629] ps1_adc = 0 retry");
+			get_ps_adc_value(&ps1_adc, &ps2_adc);
+			if(ps1_adc != 0){
+				D("[PS][cm3629] retry work");
+				break;
+			}
+			mdelay(1);
+			index++;
+		}
+	}
 	if (lpi->ps_select == CM3629_PS2_ONLY) {
 		ps_thd_set = lpi->ps2_thd_set;
 		ps_adc = ps2_adc;
@@ -555,7 +575,7 @@ static void report_psensor_input_event(struct cm3629_info *lpi, int interrupt_fl
 	} else {/*interrupt_fla = 2 meam close isr,  interrupt_fla = 1 mean far isr*/
 		val = (interrupt_flag == 2) ? 0 : 1;
 	}
-
+	ps_near = !val;
 	if (lpi->ps_debounce == 1 && lpi->mfg_mode != NO_IGNORE_BOOT_MODE) {
 		if (val == 0) {
 			D("[PS][cm3629] delay proximity %s, ps_adc=%d, High thd= %d, interrupt_flag %d\n",
@@ -932,10 +952,12 @@ static int psensor_enable(struct cm3629_info *lpi)
 	uint8_t ps_adc1 = 0;
 	uint8_t ps_adc2 = 0;
 #endif
-
+	mutex_lock(&ps_enable_mutex);
 	D("[PS][cm3629] %s\n", __func__);
 	if (lpi->ps_enable) {
-		D("[PS][cm3629] %s: already enabled\n", __func__);
+		D("[PS][cm3629] %s: already enabled %d\n", __func__, lpi->ps_enable);
+		lpi->ps_enable++;
+		mutex_unlock(&ps_enable_mutex);
 		return 0;
 	}
 	blocking_notifier_call_chain(&psensor_notifier_list, 1, NULL);
@@ -981,6 +1003,7 @@ static int psensor_enable(struct cm3629_info *lpi)
 		pr_err(
 			"[PS][cm3629 error]%s: fail to enable irq %d as wake interrupt\n",
 			__func__, lpi->irq);
+		mutex_unlock(&ps_enable_mutex);
 		return ret;
 	}
 
@@ -996,6 +1019,7 @@ static int psensor_enable(struct cm3629_info *lpi)
 		}
 	}
 #endif
+	mutex_unlock(&ps_enable_mutex);
 	return ret;
 }
 
@@ -1003,12 +1027,16 @@ static int psensor_disable(struct cm3629_info *lpi)
 {
 	int ret = -EIO;
 	char cmd[2];
-
+	mutex_lock(&ps_enable_mutex);
 	lpi->ps_pocket_mode = 0;
 
-	D("[PS][cm3629] %s\n", __func__);
-	if (!lpi->ps_enable) {
-		D("[PS][cm3629] %s: already disabled\n", __func__);
+	D("[PS][cm3629] %s %d\n", __func__, lpi->ps_enable);
+	if (lpi->ps_enable != 1) {
+		if (lpi->ps_enable > 1)
+			lpi->ps_enable--;
+		else
+			D("[PS][cm3629] %s: already disabled\n", __func__);
+		mutex_unlock(&ps_enable_mutex);
 		return 0;
 	}
 
@@ -1017,6 +1045,7 @@ static int psensor_disable(struct cm3629_info *lpi)
 		pr_err(
 			"[PS][cm3629 error]%s: fail to disable irq %d as wake interrupt\n",
 			__func__, lpi->irq);
+		mutex_unlock(&ps_enable_mutex);
 		return ret;
 	}
 
@@ -1026,6 +1055,7 @@ static int psensor_disable(struct cm3629_info *lpi)
 				PS_config, cmd, 3);
 	if (ret < 0) {
 		pr_err("[PS][cm3629 error]%s: disable psensor fail\n", __func__);
+		mutex_unlock(&ps_enable_mutex);
 		return ret;
 	}
 
@@ -1050,6 +1080,7 @@ static int psensor_disable(struct cm3629_info *lpi)
 			PS_1_thd, cmd, 3);
 	}
 #endif
+	mutex_unlock(&ps_enable_mutex);
 	return ret;
 }
 
@@ -1075,13 +1106,13 @@ static int psensor_release(struct inode *inode, struct file *file)
 
 	lpi->psensor_opened = 0;
 
-	return psensor_disable(lpi);
+	return ps_hal_enable ? psensor_disable(lpi) : 0 ;
 }
 
 static long psensor_ioctl(struct file *file, unsigned int cmd,
 			unsigned long arg)
 {
-	int val;
+	int val, err;
 	struct cm3629_info *lpi = lp_info;
 
 	D("[PS][cm3629] %s cmd %d\n", __func__, _IOC_NR(cmd));
@@ -1090,10 +1121,17 @@ static long psensor_ioctl(struct file *file, unsigned int cmd,
 	case CAPELLA_CM3602_IOCTL_ENABLE:
 		if (get_user(val, (unsigned long __user *)arg))
 			return -EFAULT;
-		if (val)
-			return psensor_enable(lpi);
-		else
-			return psensor_disable(lpi);
+		if (val) {
+			err = psensor_enable(lpi);
+			if (!err)
+				ps_hal_enable = 1;
+			return err;
+		} else {
+			err = psensor_disable(lpi);
+			if (!err)
+				ps_hal_enable = 0;
+			return err;
+		}
 		break;
 	case CAPELLA_CM3602_IOCTL_GET_ENABLED:
 		return put_user(lpi->ps_enable, (unsigned long __user *)arg);
@@ -1362,7 +1400,6 @@ static struct miscdevice lightsensor_misc = {
 static ssize_t ps_adc_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
-
 	uint8_t ps_adc1 = 0;
 	uint8_t ps_adc2 = 0;
 	int ret;
@@ -1387,7 +1424,6 @@ static ssize_t ps_adc_show(struct device *dev,
 		      ps_adc1, lpi->ps_enable, int_gpio, lpi->ps_pocket_mode,
 		      (lpi->model == CAPELLA_CM36282) ? "CM36282" : "CM36292",
 		      ps_adc2);
-
 	return ret;
 }
 
@@ -1395,7 +1431,7 @@ static ssize_t ps_enable_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	int ps_en;
+	int ps_en, err;
 	struct cm3629_info *lpi = lp_info;
 
 	ps_en = -1;
@@ -1439,10 +1475,14 @@ static ssize_t ps_enable_store(struct device *dev,
 	D("[PS][cm3629] %s: ps_en=%d\n",
 			__func__, ps_en);
 
-	if (ps_en)
-		psensor_enable(lpi);
-	else
+	if (ps_en && !ps_drv_enable) {
+		err = psensor_enable(lpi);
+		if (!err)
+			ps_drv_enable = 1;
+	} else if (!ps_en && ps_drv_enable) {
+		ps_drv_enable = 0;
 		psensor_disable(lpi);
+	}
 
 	return count;
 }
@@ -1556,7 +1596,7 @@ static ssize_t ps_canc_show(struct device *dev,
 {
 	int ret = 0;
 	struct cm3629_info *lpi = lp_info;
-	
+
 	ret = sprintf(buf, "PS1_CANC = 0x%02X, PS2_CANC = 0x%02X\n",
 		      lpi->inte_ps1_canc, lpi->inte_ps2_canc);
 
@@ -1623,7 +1663,7 @@ static ssize_t ps_i2c_store(struct device *dev,
 	char *token[10];
 	int i, ret =0;
 	uint8_t reg = 0, value[3] = {0}, read_value[3] = {0};
-	
+
 	printk(KERN_INFO "[CM3629_] %s\n", buf);
 	for (i = 0; i < 3; i++)
 		token[i] = strsep((char **)&buf, " ");
@@ -1632,7 +1672,7 @@ static ssize_t ps_i2c_store(struct device *dev,
 	 ret = strict_strtoul(token[2], 16, (unsigned long *)&(value[1]));
 	_cm3629_I2C_Write2(lpi->cm3629_slave_address,
 		reg, value, 3);
-	
+
 	D("[CM3629] Set REG=0x%x, value[0]=0x%x, value[1]=0x%x\n",
 	  reg, value[0], value[1]);
 	_cm3629_I2C_Read2(lpi->cm3629_slave_address, reg, read_value, 2);
@@ -1935,6 +1975,37 @@ err_free_ls_input_device:
 	return ret;
 }
 
+static ssize_t ls_dark_level_show(struct device *dev,
+                        struct device_attribute *attr, char *buf)
+{
+        int ret = 0;
+        struct cm3629_info *lpi = lp_info;
+
+        ret = sprintf(buf, "LS_dark_level = %d\n",
+                      lpi->dark_level);
+
+        return ret;
+}
+static ssize_t ls_dark_level_store(struct device *dev,
+                                struct device_attribute *attr,
+                                const char *buf, size_t count)
+{
+        int ls_dark_level = 0;
+
+        struct cm3629_info *lpi = lp_info;
+
+        sscanf(buf, "%d" , &ls_dark_level);
+
+        lpi->dark_level = (uint8_t) ls_dark_level;
+
+        D("[LS] %s: LS_dark_level = %d\n",
+          __func__, lpi->dark_level);
+
+        return count;
+}
+static DEVICE_ATTR(ls_dark_level, 0664, ls_dark_level_show, ls_dark_level_store);
+
+
 static int psensor_setup(struct cm3629_info *lpi)
 {
 	int ret;
@@ -1975,6 +2046,70 @@ err_free_ps_input_device:
 	return ret;
 }
 
+int power_key_check_in_pocket(void)
+{
+	if(plsensor_chip_state) /*pl-sensor no ack */
+		return 0;
+
+	struct cm3629_info *lpi = lp_info;
+	int ls_dark;
+
+	uint32_t ls_adc = 0;
+	int ls_level = 0;
+	int i;
+	pocket_mode_flag = 1;
+	D("[cm3629] %s +++\n", __func__);
+	/* get p-sensor status */
+	psensor_enable(lpi);
+	D("[cm3629] %s ps_near %d\n", __func__, ps_near);
+	psensor_disable(lpi);
+
+	/* get light sensor status */
+	mutex_lock(&als_get_adc_mutex);
+	get_ls_adc_value(&ls_adc, 0);
+	enable_als_interrupt();
+	mutex_unlock(&als_get_adc_mutex);
+	for (i = 0; i < 10; i++) {
+		if (ls_adc <= (*(lpi->adc_table + i))) {
+			ls_level = i;
+			if (*(lpi->adc_table + i))
+				break;
+		}
+		if (i == 9) {/*avoid  i = 10, because 'cali_table' of size is 10 */
+			ls_level = i;
+			break;		}
+	}
+	D("[cm3629] %s ls_adc %d, ls_level %d\n", __func__, ls_adc, ls_level);
+	ls_dark = (ls_level <= lpi->dark_level) ? 1 : 0;
+	D("[cm3629] %s --- ls_dark %d\n", __func__, ls_dark);
+	pocket_mode_flag = 0;
+	return (ls_dark && ps_near);
+
+}
+
+int psensor_enable_by_touch_driver(int on)
+{
+	struct cm3629_info *lpi = lp_info;
+
+	if (plsensor_chip_state) {
+		D("[cm3629] %s return by cm3629 probe fail\n", __func__);
+		return 0;
+	}
+	psensor_enable_by_touch = 1;
+
+	D("[cm3629] %s on:%d\n", __func__, on);
+	if (on) {
+		psensor_enable(lpi);
+	}
+	else {
+		psensor_disable(lpi);
+	}
+		psensor_enable_by_touch = 0;
+
+	return 0;
+}
+
+
 static int cm3629_read_chip_id(struct cm3629_info *lpi)
 {
 	uint8_t chip_id[3] = {0};
@@ -1987,7 +2122,7 @@ static int cm3629_read_chip_id(struct cm3629_info *lpi)
 
 	ret =_cm3629_I2C_Read2(lpi->cm3629_slave_address, CH_ID, chip_id, 2);
 	if (ret >= 0) {
-		if ((chip_id[0] != 0x29) && (chip_id[0] != 0x92) && (chip_id[0] != 0x82)) {
+		if ((chip_id[0] != 0x29) && (chip_id[0] != 0x92) && (chip_id[0] != 0x82) && (chip_id[0] != 0x83)) {
 			ret = -1;
 			D("[PS][cm3629] %s, chip_id  Err value = 0x%x, 0x%x, ret %d\n",
 				__func__, chip_id[0], chip_id[1], ret);
@@ -2059,10 +2194,11 @@ static void cm3629_early_suspend(struct early_suspend *h)
 	struct cm3629_info *lpi = lp_info;
 
 	D("LS][cm3629] %s\n", __func__);
-
+	MF_DEBUG("00040000");
 	if (lpi->als_enable)
 		lightsensor_disable(lpi);
 
+	MF_DEBUG("00040001");
 }
 
 static void cm3629_late_resume(struct early_suspend *h)
@@ -2085,8 +2221,9 @@ static int cm3629_probe(struct i2c_client *client,
 	struct cm3629_platform_data *pdata;
 
 	D("[PS][cm3629] %s\n", __func__);
-
-
+	plsensor_chip_state = 0; /*default state*/
+	pocket_mode_flag = 0;
+	psensor_enable_by_touch = 0;
 	lpi = kzalloc(sizeof(struct cm3629_info), GFP_KERNEL);
 	if (!lpi)
 		return -ENOMEM;
@@ -2140,12 +2277,13 @@ static int cm3629_probe(struct i2c_client *client,
 	lpi->ps2_adc_offset = pdata->ps2_adc_offset;
 	lpi->ps_debounce = pdata->ps_debounce;
 	lpi->ps_delay_time = pdata->ps_delay_time;
+	lpi->dark_level = pdata->dark_level;
 
 	lp_info = lpi;
-
 	ret = cm3629_read_chip_id(lpi);
 	if (ret < 0) {
 		pr_err("[PS_ERR][cm3629 error]%s: cm3629_read_chip_id error!\n", __func__);
+		plsensor_chip_state = 1; /*represent plsensor no ack*/
 		goto err_cm3629_read_chip_id;
 	}
 
@@ -2167,8 +2305,10 @@ static int cm3629_probe(struct i2c_client *client,
 	mutex_init(&als_disable_mutex);
 	mutex_init(&als_flag_mutex);
 	mutex_init(&als_get_adc_mutex);
+	mutex_init(&ps_enable_mutex);
 	mutex_init(&ps_report_input_mutex);
 
+	ps_hal_enable = ps_drv_enable = 0;
 	ret = lightsensor_setup(lpi);
 	if (ret < 0) {
 		pr_err("[LS][cm3629 error]%s: lightsensor_setup error!!\n",
@@ -2252,6 +2392,10 @@ static int cm3629_probe(struct i2c_client *client,
 	ret = device_create_file(lpi->ls_dev, &dev_attr_ls_flevel);
 	if (ret)
 		goto err_create_ls_device_file;
+
+        ret = device_create_file(lpi->ls_dev, &dev_attr_ls_dark_level);
+        if (ret)
+                goto err_create_ls_device_file;
 
 	lpi->ps_dev = device_create(lpi->cm3629_class,
 				NULL, 0, "%s", "proximity");

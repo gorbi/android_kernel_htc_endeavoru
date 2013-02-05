@@ -30,10 +30,10 @@
 
 #include <linux/pm_qos_params.h>
 #include <linux/cpufreq.h>
+#include <linux/sched.h>
 #define BOOST_CPU_FREQ_MIN 475000
 
 #define PLAYBACK_PERIOD_US 		50000
-#define PLAYBACK_DUTY_US 		36500
 #define ZERO_DUTY_US 			25000
 
 #define VIBE_DEBUG				0
@@ -130,7 +130,7 @@ static void vibrator_enable(struct timed_output_dev *dev, int value)
 	if (value < 0)
 		return;
 	if (value) {
-		printk("[VIB] vibration enable and duration time = %d ms\n", value);
+		printk(KERN_INFO "[VIB] vibration enable and duration time %d ms:%s(parent:%s): tgid=%d\n", value,current->comm, current->parent->comm, current->tgid);
 		if(value==18) {
 			if(is_only_cpu0_online && cpufreq_get(0) < 475000) {
 				printk("[VIB] boost CPU#0 freq to 475MHZ\n");
@@ -243,7 +243,7 @@ static int vibrator_probe(struct platform_device *pdev)
 	vib->pdata->ena_gpio = pdata->ena_gpio;
 	vib->pdata->pwm_data.name = pdata->pwm_data.name;
 	vib->pdata->pwm_data.bank = pdata->pwm_data.bank;
-	vib->pwm_duty = PLAYBACK_DUTY_US;
+	vib->pwm_duty = pdata->duty;
 	INIT_WORK(&vib->work, vib_work_func);
 	hrtimer_init(&vib->vib_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	vib->vib_timer.function = vib_timer_func;
@@ -292,7 +292,7 @@ static int vibrator_probe(struct platform_device *pdev)
 		goto err_create_file;
 
 	g_vib = vib;
-	g_vib->pwm_duty = PLAYBACK_DUTY_US;
+	g_vib->pwm_duty = pdata->duty;
 	debugmode = cpulock = 0;
 	platform_set_drvdata(pdev, vib);
 
@@ -330,7 +330,7 @@ static int vibrator_resume(struct platform_device *pdev)
 
 	printk("[VIB][RESUME] vibrator_resume +++\n");
 	tegra_gpio_disable(vib->pdata->pwm_gpio);
-	vib->pwm_duty = PLAYBACK_DUTY_US;
+	vib->pwm_duty = g_vib->pwm_duty;
 	printk("[VIB][RESUME] vibrator_resume ---\n");
 	return 0;
 }

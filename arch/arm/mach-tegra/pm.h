@@ -2,7 +2,7 @@
  * arch/arm/mach-tegra/include/mach/pm.h
  *
  * Copyright (C) 2010 Google, Inc.
- * Copyright (C) 2010-2011 NVIDIA Corporation
+ * Copyright (C) 2010-2012 NVIDIA Corporation
  *
  * Author:
  *	Colin Cross <ccross@google.com>
@@ -28,6 +28,10 @@
 #include <linux/clkdev.h>
 
 #include <mach/iomap.h>
+
+#define PMC_SCRATCH0		0x50
+#define PMC_SCRATCH1		0x54
+#define PMC_SCRATCH4		0x60
 
 enum tegra_suspend_mode {
 	TEGRA_SUSPEND_NONE = 0,
@@ -71,11 +75,15 @@ struct tegra_io_dpd {
 	u8 io_dpd_bit;		/* bit position for driver in dpd register */
 };
 
+/* clears io dpd settings before kernel code */
+void tegra_bl_io_dpd_cleanup(void);
+
 unsigned long tegra_cpu_power_good_time(void);
 unsigned long tegra_cpu_power_off_time(void);
 unsigned long tegra_cpu_lp2_min_residency(void);
 void tegra_clear_cpu_in_lp2(int cpu);
 bool tegra_set_cpu_in_lp2(int cpu);
+bool tegra_is_cpu_in_lp2(int cpu);
 
 int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags);
 
@@ -154,6 +162,8 @@ unsigned long tegra2_lp2_timer_remain(void);
 #ifdef CONFIG_ARCH_TEGRA_3x_SOC
 void tegra3_lp2_set_trigger(unsigned long cycles);
 unsigned long tegra3_lp2_timer_remain(void);
+int tegra3_is_lp2_timer_ready(unsigned int cpu);
+void tegra3_lp2_timer_cancel_secondary(void);
 #endif
 
 static inline void tegra_lp0_suspend_init(void)
@@ -183,6 +193,22 @@ static inline unsigned long tegra_lp2_timer_remain(void)
 #endif
 }
 
+static inline int tegra_is_lp2_timer_ready(unsigned int cpu)
+{
+#if defined(CONFIG_TEGRA_LP2_ARM_TWD) || defined(CONFIG_ARCH_TEGRA_2x_SOC)
+	return 1;
+#else
+	return tegra3_is_lp2_timer_ready(cpu);
+#endif
+}
+
+static inline void tegra_lp2_timer_cancel_secondary(void)
+{
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+	tegra3_lp2_timer_cancel_secondary();
+#endif
+}
+
 #if DEBUG_CLUSTER_SWITCH && 0 /* !!!FIXME!!! THIS IS BROKEN */
 extern unsigned int tegra_cluster_debug;
 #define DEBUG_CLUSTER(x) do { if (tegra_cluster_debug) printk x; } while (0)
@@ -205,6 +231,8 @@ extern bool tegra_all_cpus_booted __read_mostly;
 
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
 void tegra_generic_smc(u32 type, u32 subtype, u32 arg);
+void tegra_generic_smc_local(u32 type, u32 subtype, u32 arg);
+void tegra_generic_smc_uncached(u32 type, u32 subtype, u32 arg);
 #endif
 
 /* The debug channel uart base physical address */

@@ -553,11 +553,11 @@ long st_register(struct st_proto_s *new_proto)
 		set_bit(ST_REG_IN_PROGRESS, &st_gdata->st_state);
 		st_recv = st_kim_recv;
 
-		/* enable the ST LL - to set default chip state */
-		st_ll_enable(st_gdata);
+        /* enable the ST LL - to set default chip state */
+        st_ll_enable(st_gdata);
 
-		/* release lock previously held - re-locked below */
-		spin_unlock_irqrestore(&st_gdata->lock, flags);
+        /* release lock previously held - re-locked below */
+        spin_unlock_irqrestore(&st_gdata->lock, flags);
 
 		/* this may take a while to complete
 		 * since it involves BT fw download
@@ -569,12 +569,12 @@ long st_register(struct st_proto_s *new_proto)
 			    (test_bit(ST_REG_PENDING, &st_gdata->st_state))) {
 				pr_err(" KIM failure complete callback \n");
 				st_reg_complete(st_gdata, err);
-				clear_bit(ST_REG_PENDING, &st_gdata->st_state);
+                clear_bit(ST_REG_PENDING, &st_gdata->st_state);
 			}
 			return -EINVAL;
 		}
 
-		spin_lock_irqsave(&st_gdata->lock, flags);
+        spin_lock_irqsave(&st_gdata->lock, flags);
 
 		clear_bit(ST_REG_IN_PROGRESS, &st_gdata->st_state);
 
@@ -596,7 +596,7 @@ long st_register(struct st_proto_s *new_proto)
 		if (st_gdata->is_registered[new_proto->chnl_id] == true) {
 			pr_err(" proto %d already registered \n",
 				   new_proto->chnl_id);
-			spin_unlock_irqrestore(&st_gdata->lock, flags);
+            spin_unlock_irqrestore(&st_gdata->lock, flags);
 			return -EALREADY;
 		}
 
@@ -639,7 +639,7 @@ long st_unregister(struct st_proto_s *proto)
 
 	spin_lock_irqsave(&st_gdata->lock, flags);
 
-	if (st_gdata->is_registered[proto->chnl_id] == false) {
+    if (st_gdata->is_registered[proto->chnl_id] == false) {
 		pr_err(" chnl_id %d not registered\n", proto->chnl_id);
 		spin_unlock_irqrestore(&st_gdata->lock, flags);
 		return -EPROTONOSUPPORT;
@@ -649,9 +649,9 @@ long st_unregister(struct st_proto_s *proto)
 	remove_channel_from_table(st_gdata, proto);
 	spin_unlock_irqrestore(&st_gdata->lock, flags);
 
-	/* paranoid check */
-	if (st_gdata->protos_registered < ST_EMPTY)
-	    st_gdata->protos_registered = ST_EMPTY;
+    /* paranoid check */
+    if (st_gdata->protos_registered < ST_EMPTY)
+        st_gdata->protos_registered = ST_EMPTY;
 
 	if ((st_gdata->protos_registered == ST_EMPTY) &&
 	    (!test_bit(ST_REG_PENDING, &st_gdata->st_state))) {

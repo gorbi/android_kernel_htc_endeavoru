@@ -18,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 
+#include <mach/fb.h>
 #include <linux/types.h>
 #include <linux/device.h>
 #include <mach/tegra_fb.h>
@@ -28,8 +29,14 @@
 #include <linux/wakelock.h>
 #include <linux/htc_mode_server.h>
 #include <linux/random.h>
+#include <video/tegrafb.h>
 #include <linux/usb/htc_info.h>
 #include <video/tegrafb.h>
+
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+#include "f_projector_debug.h"
+#endif
+
 #ifdef DBG
 #undef DBG
 #endif
@@ -38,11 +45,6 @@
 #define DBG(x...) do {} while (0)
 #else
 #define DBG(x...) printk(KERN_INFO x)
-#endif
-
-#define DEVELOPMENT_TEST  0
-#if DEVELOPMENT_TEST
-#include "device_hua_p.h"
 #endif
 
 #ifdef VDBG
@@ -63,12 +65,17 @@
 /* number of rx requests to allocate */
 #define PROJ_RX_REQ_MAX 4
 
-
+#ifdef DUMMY_DISPLAY_MODE_320_480
+#define DEFAULT_PROJ_WIDTH			320
+#define DEFAULT_PROJ_HEIGHT			480
+#define TOUCH_WIDTH					320
+#define TOUCH_HEIGHT				480
+#else
 #define DEFAULT_PROJ_WIDTH			480
 #define DEFAULT_PROJ_HEIGHT			800
-
 #define TOUCH_WIDTH					480
 #define TOUCH_HEIGHT				800
+#endif
 
 #define BITSPIXEL 16
 #define PROJECTOR_FUNCTION_NAME "projector"
@@ -76,16 +83,22 @@
 #define htc_mode_info(fmt, args...) \
 	printk(KERN_INFO "[htc_mode] " pr_fmt(fmt), ## args)
 
+#define DISPLAY_READY
+
 static struct wake_lock prj_idle_wake_lock;
 static int keypad_code[] = {KEY_WAKEUP, 0, 0, 0, KEY_HOME, KEY_MENU, KEY_BACK};
 static const char cand_shortname[] = "htc_cand";
 static const char htcmode_shortname[] = "htcmode";
-extern struct tegra_usb_projector_info usb_pjt_info;
-extern void fsl_udc_clk_pull_high(bool); /* workaround for stability */
 
-#ifdef CONFIG_USB_ANDROID_PROJECTOR
+#ifdef DISPLAY_READY
+extern struct tegra_usb_projector_info usb_pjt_info;
 static DEFINE_SPINLOCK(fb_data_lock);
-extern struct tegra_fb_info f_proj_data;
+#ifdef CONFIG_USB_ANDROID_PROJECTOR
+struct tegra_fb_info f_proj_data = {
+	.xres		= 480,
+	.yres		= 800,
+};
+#endif
 int tegrafb_get_var(struct tegra_fb_info *tmp)
 {
 	unsigned long flags;
@@ -96,12 +109,6 @@ int tegrafb_get_var(struct tegra_fb_info *tmp)
 	return 0;
 }
 #endif
-
-char *get_fb1_addr(void)
-{
-	usb_pjt_info.usb_offset = usb_pjt_info.latest_offset;
-	return  registered_fb[1]-> screen_base + usb_pjt_info.usb_offset;
-}
 
 struct projector_dev {
 	struct usb_function function;
@@ -230,6 +237,11 @@ struct size {
 	int h;
 };
 
+enum {
+    NOT_ON_AUTOBOT,
+    DOCK_ON_AUTOBOT,
+    HTC_MODE_RUNNING
+};
 /* the value of htc_mode_status should be one of above status */
 static atomic_t htc_mode_status = ATOMIC_INIT(0);
 
@@ -433,7 +445,7 @@ static void projector_send_Key_event(struct projector_dev *dev,
 	   we press power key. Even in GB, default qwerty.kl will not do
 	   anything for linux keycode WAKEUP, i think we can just drop here.
 	*/
-	if (iKeycode == 0)
+	if (iKeycode <= 0 || iKeycode >= sizeof(keypad_code)/sizeof(keypad_code[0]))
 		return;
 
 	input_report_key(kdev, keypad_code[iKeycode], 1);
@@ -453,24 +465,45 @@ static void projector_report_key_event(struct projector_dev *dev,
 	input_sync(kdev);
 }
 
-extern char *get_fb1_addr(void);
+char *get_fb1_addr(void)
+{
+#ifdef DISPLAY_READY
+	usb_pjt_info.usb_offset = usb_pjt_info.latest_offset;
+	return  registered_fb[1]-> screen_base + usb_pjt_info.usb_offset;
+#else
+	return NULL;
+#endif
+
+}
+
+char *get_fb_addr(void)
+{
+
+	return NULL;
+}
 
 static void send_fb(struct projector_dev *dev)
 {
 
 	struct usb_request *req;
-	char *frame;
 	int xfer;
 	int count = dev->framesize;
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+	unsigned short *frame;
+#else
+	char *frame;
+#endif
 
-#if DEVELOPMENT_TEST
-	frame = (char*)device_hua_p;
+
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+	frame = test_frame;
 #else
 	frame = get_fb1_addr();
 #endif
-	if (frame == NULL)
+	if (frame == NULL) {
+		printk(KERN_WARNING "send_fb: frame == NULL\n");
 		return;
-
+	}
 	while (count > 0) {
 		req = proj_req_get(dev, &dev->tx_idle);
 		if (req) {
@@ -483,8 +516,13 @@ static void send_fb(struct projector_dev *dev)
 					__func__, req);
 				break;
 			}
+
 			count -= xfer;
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+			frame += xfer/2;
+#else
 			frame += xfer;
+#endif
 		} else {
 			printk(KERN_ERR "send_fb: no req to send\n");
 			break;
@@ -549,13 +587,19 @@ static int send_hsml_header(struct projector_dev *dev)
 static void send_fb2(struct projector_dev *dev)
 {
 	struct usb_request *req;
-	char *frame;
 	int xfer;
+
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+	unsigned short *frame;
+	int count = dev->framesize;
+#else
+	char *frame;
 	int count = dev->htcmode_proto->server_info.width *
 				dev->htcmode_proto->server_info.height * (BITSPIXEL / 8);
+#endif
 
-#if DEVELOPMENT_TEST
-	frame = (char*)device_hua_p;
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+	frame = test_frame;
 #else
 	frame = get_fb1_addr();
 #endif
@@ -594,7 +638,11 @@ static void send_fb2(struct projector_dev *dev)
 				break;
 			}
 			count -= xfer;
+#if defined(DUMMY_DISPLAY_MODE_320_480) || defined(DUMMY_DISPLAY_MODE_480_800)
+			frame += xfer/2;
+#else
 			frame += xfer;
+#endif
 		} else {
 			printk(KERN_ERR "send_fb: no req to send\n");
 			break;
@@ -641,7 +689,7 @@ static void send_server_info(struct projector_dev *dev)
 
 	req = proj_req_get(dev, &dev->tx_idle);
 	if (req) {
-		req->length = sizeof(struct tegra_server_info);
+		req->length = sizeof(struct msm_server_info);
 		memcpy(req->buf, &dev->htcmode_proto->server_info, req->length);
 		if (usb_ep_queue(dev->ep_in, req, GFP_ATOMIC) < 0) {
 			proj_req_put(dev, &dev->tx_idle, req);
@@ -661,7 +709,7 @@ struct size rotate(struct size v)
 	return r;
 }
 
-static struct size get_projection_size(struct projector_dev *dev, struct tegra_client_info *client_info)
+static struct size get_projection_size(struct projector_dev *dev, struct msm_client_info *client_info)
 {
 	int server_width = 0;
 	int server_height = 0;
@@ -703,10 +751,28 @@ static struct size get_projection_size(struct projector_dev *dev, struct tegra_c
 	} else {
 		ret = client;
 	}
+
+	printk(KERN_INFO "projector size(w=%d, h=%d)\n", ret.w, ret.h);
+
 	return ret;
 }
 
+static void projector_get_tegrafb(struct projector_dev *dev)
+{
+#ifdef DISPLAY_READY /* TODO:wait for display function */
+	struct tegra_fb_info fb_info;
 
+	tegrafb_get_var(&fb_info);
+
+	dev->bitsPixel = BITSPIXEL;
+	dev->width = fb_info.xres;
+	dev->height = fb_info.yres;
+	dev->fbaddr = get_fb1_addr();
+	dev->framesize = dev->width * dev->height * (dev->bitsPixel / 8);
+	printk(KERN_INFO "projector: width %d, height %d framesize %d, %p\n",
+		   fb_info.xres, fb_info.yres, dev->framesize, dev->fbaddr);
+#endif
+}
 
 static void projector_enable_fb_work(struct projector_dev *dev, int enabled)
 {
@@ -737,10 +803,11 @@ static int projector_handle_htcmode_msg(struct projector_dev *dev, struct usb_re
 	int handled = 1;
 	struct size projector_size;
 
-	if ((data[0] == CLIENT_INFO_MESGID) && (req->actual == sizeof(struct tegra_client_info))) {
-		memcpy(&dev->htcmode_proto->client_info, req->buf, sizeof(struct tegra_client_info));
+	if ((data[0] == CLIENT_INFO_MESGID) && (req->actual == sizeof(struct msm_client_info))) {
+		memcpy(&dev->htcmode_proto->client_info, req->buf, sizeof(struct msm_client_info));
 
 		projector_size = get_projection_size(dev, &dev->htcmode_proto->client_info);
+		projector_get_tegrafb(dev);
 
 		dev->htcmode_proto->server_info.mesg_id = SERVER_INFO_MESGID;
 		dev->htcmode_proto->server_info.width = projector_size.w;
@@ -830,7 +897,7 @@ static void projector_complete_out(struct usb_ep *ep, struct usb_request *req)
 				dev->frame_count = 0;
 			}
 		} else if (mouse_data[0] > 0) {
-			if (mouse_data[0] < 4) {
+			 if (mouse_data[0] < 4) {
 				for (i = 0; i < 3; i++)
 					mouse_data[i] = *(((int *)(req->buf))+i);
 				projector_send_touch_event(dev,
@@ -920,6 +987,7 @@ projector_function_bind(struct usb_configuration *c, struct usb_function *f)
 	id = usb_interface_id(c, f);
 	if (id < 0)
 		return id;
+
 	projector_interface_desc.bInterfaceNumber = id;
 
 	/* allocate endpoints */
@@ -952,20 +1020,32 @@ static int projector_function_set_alt(struct usb_function *f,
 
 	DBG("%s intf: %d alt: %d\n", __func__, intf, alt);
 
-	dev->in = ep_choose(cdev->gadget,
-				&projector_highspeed_in_desc,
-				&projector_fullspeed_in_desc);
-
-	dev->out = ep_choose(cdev->gadget,
-				&projector_highspeed_out_desc,
-				&projector_fullspeed_out_desc);
-
-	ret = usb_ep_enable(dev->ep_in, dev->in);
-	if (ret)
-		return ret;
-
-	ret = usb_ep_enable(dev->ep_out,dev->out);
+	ret = config_ep_by_speed(cdev->gadget, f, dev->ep_in);
 	if (ret) {
+		dev->ep_in->desc = NULL;
+		printk(KERN_ERR "config_ep_by_speed failes for ep %s, result %d\n",
+				dev->ep_in->name, ret);
+		return ret;
+	}
+	ret = usb_ep_enable(dev->ep_in);
+	if (ret) {
+		printk(KERN_ERR "failed to enable ep %s, result %d\n",
+			dev->ep_in->name, ret);
+		return ret;
+	}
+
+	ret = config_ep_by_speed(cdev->gadget, f, dev->ep_out);
+	if (ret) {
+		dev->ep_out->desc = NULL;
+		printk(KERN_ERR "config_ep_by_speed failes for ep %s, result %d\n",
+			dev->ep_out->name, ret);
+		usb_ep_disable(dev->ep_in);
+		return ret;
+	}
+	ret = usb_ep_enable(dev->ep_out);
+	if (ret) {
+		printk(KERN_ERR "failed to enable ep %s, result %d\n",
+				dev->ep_out->name, ret);
 		usb_ep_disable(dev->ep_in);
 		return ret;
 	}
@@ -1062,7 +1142,7 @@ static int projector_keypad_init(struct projector_dev *dev)
 	set_bit(KEY_DELETE, kdev->keybit);
 	set_bit(KEY_ZOOMIN, kdev->keybit);
 	set_bit(KEY_ZOOMOUT, kdev->keybit);
-	set_bit(KEY_APP_SWITCH, kdev->keybit);
+//	set_bit(KEY_APP_SWITCH, kdev->keybit);
 
 	set_bit(KEY_WAKEUP, kdev->keybit);
 
@@ -1235,14 +1315,12 @@ projector_function_unbind(struct usb_configuration *c, struct usb_function *f)
 		input_free_device(dev->keypad_input);
 	}
 
-	fsl_udc_clk_pull_high(1); /* workaround for stability */
 }
 
 
 static int projector_bind_config(struct usb_configuration *c)
 {
 	struct projector_dev *dev;
-	struct tegra_fb_info fb_info;
 	int ret = 0;
 
 	DBG("%s\n", __func__);
@@ -1355,6 +1433,7 @@ err_free:
 	kfree(dev);
 	printk(KERN_ERR "projector gadget driver failed to initialize, err=%d\n", ret);
 	return ret;
+
 }
 
 static void projector_cleanup(void)
@@ -1455,7 +1534,7 @@ static int projector_ctrlrequest(struct usb_composite_dev *cdev,
 
 		case HSML_REQ_GET_SERVER_INFO:
 			projector_size = get_projection_size(projector_dev, &projector_dev->htcmode_proto->client_info);
-			/* projector_get_msmfb(projector_dev); */
+			projector_get_tegrafb(projector_dev);
 
 			projector_dev->htcmode_proto->server_info.mesg_id = SERVER_INFO_MESGID;
 			projector_dev->htcmode_proto->server_info.width = projector_size.w;
@@ -1528,7 +1607,8 @@ static int projector_ctrlrequest(struct usb_composite_dev *cdev,
 		cdev->req->length = value;
 		value = usb_ep_queue(cdev->gadget->ep0, cdev->req, GFP_ATOMIC);
 		if (value < 0)
-			printk(KERN_ERR "%s setup response queue error\n", __func__);
+			printk(KERN_ERR "%s setup response queue error\n",
+				__func__);
 	}
 
 	return value;

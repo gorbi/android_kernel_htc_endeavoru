@@ -199,8 +199,10 @@ void htc_pm_monitor_work(struct work_struct *work)
 	printk(KERN_INFO "[PM] hTC PM Statistic ");
 	printk(KERN_INFO "%02d-%02d %02d:%02d:%02d \n", tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
+#if 0
 	htc_print_active_wake_locks(WAKE_LOCK_IDLE);
 	htc_print_active_wake_locks(WAKE_LOCK_SUSPEND);
+#endif
 
 	if (get_kernel_flag() & KERNEL_FLAG_PM_MONITOR)
 	{

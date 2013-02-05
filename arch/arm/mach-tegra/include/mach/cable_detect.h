@@ -72,6 +72,11 @@ struct cable_detect_platform_data {
 	int32_t (*get_adc_cb)(void);
 	void (*cable_gpio_init)(void);
 
+	/* for charger reset chip */
+	int reset_en_clr_gpio;
+	int chg_wdt_en_gpio;
+	bool enable_reset_wdt;
+
 	int ac_9v_gpio;
 	void (*configure_ac_9v_gpio) (int);
 	u8 mhl_internal_3v3;
@@ -117,6 +122,20 @@ struct t_usb_status_notifier {
 	void (*func)(int cable_type);
 };
 static LIST_HEAD(g_lh_usb_notifier_list);
+
+
+#if (defined(CONFIG_USB_OTG) && defined(CONFIG_USB_OTG_HOST))
+/***********************************
+Direction: cable detect drvier -> usb driver
+ ***********************************/
+struct t_usb_host_status_notifier{
+       struct list_head usb_host_notifier_link;
+       const char *name;
+       void (*func)(bool cable_in);
+};
+int usb_host_detect_register_notifier(struct t_usb_host_status_notifier *);
+static LIST_HEAD(g_lh_usb_host_detect_notifier_list);
+#endif
 
 /***********************************
 Direction: cable detect drvier -> battery driver or other

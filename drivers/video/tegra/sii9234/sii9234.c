@@ -32,6 +32,7 @@
 #include <linux/wakelock.h>
 #include <mach/mhl.h>
 #include <mach/cable_detect.h>
+#include <mach/mfootprint.h>
 //#include <mach/debug_display.h>
 //#include <mach/board.h>
 #include "defs.h"
@@ -105,6 +106,7 @@ int TPID_SLAVE_ADDR;
    Variable & Extern variable
 **********************************************************************/
 static T_MHL_SII9234_INFO *sii9234_info_ptr;
+extern bool g_bMhlRsenLow;
 /*********************************************************************
   Prototype & Extern function
 **********************************************************************/
@@ -113,9 +115,9 @@ static DECLARE_WORK(sii9234_irq_work, sii9234_irq_do_work);
 
 static DEFINE_MUTEX(mhl_early_suspend_sem);
 bool g_bEnterEarlySuspend = false;
+bool g_bMhlProbe = false;
 static bool g_bGotUsbBus = false;
 static bool g_bNeedSimulateCableOut = false;
-bool mhl_wakeuped = false;
 //static bool g_bInitCompleted = false;
 bool g_bInitCompleted = false;
 static bool sii9244_interruptable = false;
@@ -420,6 +422,12 @@ void sii9234_disableIRQ(void)
 		disable_irq_nosync(pInfo->irq);
 		sii9244_interruptable = false;
 	}
+	if (g_bMhlRsenLow) {
+		PR_DISP_INFO("RSEN low triggered TPI_Init\n");
+		int err = TPI_Init();
+		if (err != 1)
+			PR_DISP_INFO("TPI can't init\n");
+	}
 }
 
 static irqreturn_t sii9234_irq_handler(int irq, void *data)
@@ -525,28 +533,14 @@ void sii9234_mhl_device_wakeup(void)
 	/* MHL_RST set O(H) */
 	gpio_set_value(pInfo->reset_pin, 1);
 
-	err = TPI_Init(sii9234_info_ptr->board_params);
+	err = TPI_Init();
 	if (err != 1)
 		PR_DISP_INFO("TPI can't init\n");
 
 	sii9244_interruptable = true;
 	PR_DISP_INFO("Enable Sii9244 IRQ\n");
 
-	/* request irq pin again, for solving MHL_INT is captured to INUT LOW */
-	if(mhl_wakeuped) {
-		disable_irq_nosync(pInfo->irq);
-		free_irq(pInfo->irq, pInfo);
-
-		ret = request_irq(pInfo->irq, sii9234_irq_handler, IRQF_TRIGGER_LOW, "mhl_sii9234_evt", pInfo);
-		if (ret < 0) {
-			PR_DISP_DEBUG("%s: request_irq(%d) failed for gpio %d (%d)\n",
-					__func__, pInfo->irq, pInfo->intr_pin, ret);
-			ret = -EIO;
-		}
-	}
-
 	enable_irq(pInfo->irq);
-	mhl_wakeuped = true;
 
 	/* switch to D0, we now depends on Sii9244 to detect the connection by MHL interrupt */
 	/* if there is no IRQ in the following steps , the status of connect will be in-correct and cannot be recovered */
@@ -578,7 +572,7 @@ static void irq_timeout_handler(struct work_struct *w)
 		/*need to request_irq again on 8960 VLE, or this prevention is not working*/
 		PR_DISP_INFO("%s , There is no MHL ISR simulate cable out.\n", __func__);
 		disable_irq_nosync(pInfo->irq);
-		TPI_Init(sii9234_info_ptr->board_params);
+		TPI_Init();
 		free_irq(pInfo->irq, pInfo);
 		ret = request_irq(pInfo->irq, sii9234_irq_handler, IRQF_TRIGGER_LOW, "mhl_sii9234_evt", pInfo);
 		if (ret < 0) {
@@ -637,15 +631,17 @@ static void sii9234_early_suspend(struct early_suspend *h)
 	/* Cancel the previous TMDS on delay work...*/
 	cancel_delayed_work(&pInfo->mhl_on_delay_work);
 	if (pInfo->isMHL) {
-		/* Turn-off the TMDS output...*/
-		sii9234_suspend(pInfo->i2c_client, PMSG_SUSPEND);
+		if(!tpi_get_hpd_state()) {
+			/* Turn-off the TMDS output...*/
+			sii9234_suspend(pInfo->i2c_client, PMSG_SUSPEND);
 
-		/* Disable Sii IRQ */
-		PR_DISP_INFO("Disable Sii9244 IRQ\n");
-		disable_irq_nosync(pInfo->irq);
-		sii9244_interruptable = false;
+			/* Disable Sii IRQ */
+			PR_DISP_INFO("Disable Sii9244 IRQ\n");
+			disable_irq_nosync(pInfo->irq);
+			sii9244_interruptable = false;
 
-		hdmi_hdcp_early_suspend();
+			hdmi_hdcp_early_suspend();
+		}
 	}
 
 	/* Check already power on or not?*/
@@ -666,12 +662,13 @@ static void sii9234_late_resume(struct early_suspend *h)
 	mutex_lock(&mhl_early_suspend_sem);
 
 	if (pInfo->isMHL) {
-		/* Enable Sii IRQ */
-		PR_DISP_INFO("Enable Sii9244 IRQ\n");
-		enable_irq(pInfo->irq);
-		sii9244_interruptable = true;
-
-		hdmi_hdcp_late_resume();
+		if(!tpi_get_hpd_state()) {
+			/* Enable Sii IRQ */
+			PR_DISP_INFO("Enable Sii9244 IRQ\n");
+			enable_irq(pInfo->irq);
+			sii9244_interruptable = true;
+			hdmi_hdcp_late_resume();
+		}
 	}
 
 	queue_delayed_work(pInfo->wq, &pInfo->mhl_on_delay_work, HZ);
@@ -688,7 +685,7 @@ static void mhl_on_delay_handler(struct work_struct *w)
 	mutex_lock(&mhl_early_suspend_sem);
 	if (IsMHLConnection()) {
 		//fill_black_screen();
-		sii9234_EnableTMDS();
+		//sii9234_EnableTMDS();
 		PR_DISP_DEBUG("MHL has connected. No SimulateCableOut!!!\n");
 		mutex_unlock(&mhl_early_suspend_sem);
 		return;
@@ -698,7 +695,7 @@ static void mhl_on_delay_handler(struct work_struct *w)
 			/*MHL dongle plugged but no HDMI calbe*/
 			PR_DISP_DEBUG("notify cable out, re-init cable & mhl\n");
 			update_mhl_status(false, CONNECT_TYPE_UNKNOWN);
-			TPI_Init(sii9234_info_ptr->board_params);
+			TPI_Init();
 		}
 	}
 	mutex_unlock(&mhl_early_suspend_sem);
@@ -755,6 +752,8 @@ static int sii9234_probe(struct i2c_client *client,
 	pInfo->ddc_clk_pin    = pdata->gpio_ddc_clk;
 	pInfo->ddc_data_pin   = pdata->gpio_ddc_data;
 	pInfo->enMhlD3Guard   = pdata->enMhlD3Guard;
+	/* make sure TPI_Init() works fine with pInfo */
+	g_bMhlProbe = true;
 	/* Power ON */
 	if (pInfo->pwrCtrl)
 		pInfo->pwrCtrl(1);
@@ -764,7 +763,7 @@ static int sii9234_probe(struct i2c_client *client,
 	gpio_direction_output(pInfo->reset_pin, 0);
 	gpio_request(pInfo->intr_pin, "mhl_sii9234_gpio_intr");
 	gpio_direction_input(pInfo->intr_pin);
-	rv = TPI_Init(sii9234_info_ptr->board_params);
+	rv = TPI_Init();
 	if (rv != TRUE) {
 		PR_DISP_DEBUG("%s: can't init\n", __func__);
 		ret = -ENOMEM;
@@ -903,6 +902,7 @@ err_create_workqueue:
 	gpio_free(pInfo->reset_pin);
 	gpio_free(pInfo->intr_pin);
 err_init:
+	g_bMhlProbe = false;
 err_request_intr_pin:
 err_platform_data_null:
 	kfree(pInfo);
@@ -910,7 +910,7 @@ err_check_functionality_failed:
 
 	if (sii9234_get_ci2ca() == 0) {
 		/* Power OFF */
-		if (pInfo->pwrCtrl)
+		if (pInfo && pInfo->pwrCtrl)
 			pInfo->pwrCtrl(0);
 	}
 
