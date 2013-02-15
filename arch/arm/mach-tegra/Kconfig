@@ -560,7 +560,7 @@ config TEGRA_EMC_TO_DDR_CLOCK
 config TEGRA_INTERACTIVE_GOV_ON_EARLY_SUSPEND
 	bool "Use interactive cpu frequency governor when device enters early suspend"
 	depends on HAS_EARLYSUSPEND && CPU_FREQ && !TEGRA_CONSERVATIVE_GOV_ON_EARLY_SUSPEND
-	default y
+	default n
 	help
 	 Also will restore to original cpu frequency governor when device is resumed
 
