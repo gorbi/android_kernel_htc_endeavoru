@@ -34,7 +34,7 @@
 #include <net/fib_rules.h>
 
 // ** [Start] HTC add iptables debug log
-#define FIB_RULE_DEBUG 0
+#define FIB_RULE_DEBUG 1
 // ** [End] HTC add iptables debug log
 
 struct fib4_rule {
